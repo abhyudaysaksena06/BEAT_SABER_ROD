@@ -268,6 +268,37 @@ Also: the full landmark model (`modelComplexity: 1`) instead of the lite one,
 and `maxNumHands: 3` so the crowd filter has a spare to cull without paying for a
 fourth.
 
+### Rendering is decoupled from tracking
+
+`camera_utils.js` does not capture the next camera frame until MediaPipe's
+`hands.send()` for the current one has fully resolved (see `Q()` in
+`lib/camera_utils/camera_utils.js`), so the `hands.onResults` callback fires at
+whatever rate the landmark model can actually run — typically well under 60fps.
+
+The first draft ran the entire game — video paint, note spawn/progress,
+collision, drawing — from inside that callback, which meant the whole game was
+capped to MediaPipe's inference rate. On modest hardware this reads as general
+lag: notes visibly stepping instead of gliding, and swings landing later than
+they should relative to the block.
+
+`onResults` now does only what genuinely needs a fresh hand sample: building
+the hand list, filtering, and updating each rod's smoothed position and
+velocity. Everything else — camera paint, note motion, drawing, hit checks —
+runs in its own `requestAnimationFrame` loop (`tick()`), independent of
+MediaPipe's cadence and typically at full display refresh.
+
+Between hand samples, each rod's on-screen and hit-tested position is the last
+confirmed sample extrapolated forward by its measured velocity
+(`dispX/dispY/dispTX/dispTY`), capped at 80ms so a stale reading can't run
+away. Collision (`saberDist`/`handDist`) reads the same extrapolated position
+that gets drawn, so a hit always registers exactly where the rod appears to be
+— there is no gap between what's on screen and what the game checks against.
+
+The status bar's FPS reading is now split in two: render rate and hand-track
+rate (`60 FPS · 22 TRACK`), so a slow machine's real bottleneck — inference,
+not rendering — stays visible instead of being hidden behind one blended
+number.
+
 ### Cut feedback
 
 A hit no longer just deletes the block. It **splits along the cut line** — the

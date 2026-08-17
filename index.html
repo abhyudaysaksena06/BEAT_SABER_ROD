@@ -373,21 +373,33 @@ function newSaber() {
   return {
     active: false, seen: 0,
     x: 0, y: 0,          // smoothed palm centre — the contact point
-    px: 0, py: 0,        // contact point last frame (swept-collision segment)
-    tx: 0, ty: 0,        // smoothed blade tip
-    ptx: 0, pty: 0,      // tip last frame
-    vx: 0, vy: 0,        // px/second
+    px: 0, py: 0,        // contact point at the last confirmed hand sample
+    tx: 0, ty: 0,        // smoothed rod tip
+    ptx: 0, pty: 0,      // tip at the last confirmed hand sample
+    vx: 0, vy: 0,        // px/second, measured from confirmed samples only
     span: 0.2,           // apparent hand size — stands in for distance
     onTarget: false,     // lined up with a live block right now
     speed: 0, trail: [],
+    // Display position: x/y/tx/ty extrapolated forward by vx/vy to the
+    // current render tick (see tick()). Drawing and collision both read
+    // this rather than x/y/tx/ty directly, so what's on screen is exactly
+    // what registers a hit — the render loop runs far more often than
+    // MediaPipe delivers new samples, and without this the rod would
+    // visibly sit ahead of or behind where swings actually connect.
+    dispX: 0, dispY: 0, dispTX: 0, dispTY: 0,
+    dispPX: 0, dispPY: 0, dispPTX: 0, dispPTY: 0,
+    dispReady: false,
   };
 }
 const sabers = { left: newSaber(), right: newSaber() };
 
-let lastFrame = 0;       // timestamp of previous frame, for real dt
+let lastFrame = 0;       // timestamp of previous render tick, for real dt
+let lastHandFrame = 0;   // timestamp of previous MediaPipe callback, for hand dt
 
 let peakSwing = 0, lastBrightness = null;
-let frameTimes = [], fpsValue = 0;
+let frameTimes = [], fpsValue = 0;           // render loop rate
+let trackFrameTimes = [], trackFpsValue = 0; // MediaPipe hand-detection rate
+let cameraReady = false;
 
 // Song clock. Normally the audio element drives everything; the debug hook
 // can pin it to a fixed value to step the game deterministically.
@@ -813,6 +825,14 @@ function drawNote(n, p) {
 function drawSaber(s, color) {
   if (!s.active) return;
 
+  // Draw at the extrapolated display position, not the last confirmed
+  // sample — this runs every render tick (up to 60fps) while MediaPipe only
+  // delivers a new sample every so often, so drawing the raw sample would
+  // make the rod visibly stair-step. Collision (saberDist/handDist) reads
+  // the same dispX/Y/TX/TY fields, so the rod always hits exactly where it
+  // is drawn.
+  const px = s.dispX, py = s.dispY, tx = s.dispTX, ty = s.dispTY;
+
   // Apparent hand size stands in for how far forward the hand is. Reaching
   // toward the camera thickens the rod, pulling back thins it. A flat line
   // of constant width sits *on* the picture; one that breathes with distance
@@ -822,7 +842,7 @@ function drawSaber(s, color) {
   // visibly either side of it.
   const dep = Math.min(1.7, Math.max(0.65, s.span / 0.16));
 
-  const dx = s.tx - s.x, dy = s.ty - s.y;
+  const dx = tx - px, dy = ty - py;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;      // along the rod
   const nx = -uy, ny = ux;                 // across it
@@ -853,7 +873,7 @@ function drawSaber(s, color) {
     }
     ctx.closePath();
 
-    const grad = ctx.createLinearGradient(s.x, s.y, s.trail[0].x, s.trail[0].y);
+    const grad = ctx.createLinearGradient(px, py, s.trail[0].x, s.trail[0].y);
     grad.addColorStop(0, color);
     grad.addColorStop(1, "transparent");
 
@@ -872,10 +892,10 @@ function drawSaber(s, color) {
   // (untapered) quad so the flat sides of the cross section read correctly.
   const quad = (a, b) => {
     ctx.beginPath();
-    ctx.moveTo(s.x + nx * a,  s.y + ny * a);
-    ctx.lineTo(s.tx + nx * b, s.ty + ny * b);
-    ctx.lineTo(s.tx - nx * b, s.ty - ny * b);
-    ctx.lineTo(s.x - nx * a,  s.y - ny * a);
+    ctx.moveTo(px + nx * a, py + ny * a);
+    ctx.lineTo(tx + nx * b, ty + ny * b);
+    ctx.lineTo(tx - nx * b, ty - ny * b);
+    ctx.lineTo(px - nx * a, py - ny * a);
     ctx.closePath();
   };
 
@@ -889,29 +909,29 @@ function drawSaber(s, color) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.beginPath();
-  ctx.moveTo(s.x + nx * wRod,  s.y + ny * wRod);
-  ctx.lineTo(s.tx + nx * wRod, s.ty + ny * wRod);
-  ctx.lineTo(s.tx,             s.ty);
-  ctx.lineTo(s.x,              s.y);
+  ctx.moveTo(px + nx * wRod, py + ny * wRod);
+  ctx.lineTo(tx + nx * wRod, ty + ny * wRod);
+  ctx.lineTo(tx,             ty);
+  ctx.lineTo(px,             py);
   ctx.closePath();
   ctx.fill();
 
   ctx.fillStyle = "rgba(100,116,139,0.45)";
   ctx.beginPath();
-  ctx.moveTo(s.x,              s.y);
-  ctx.lineTo(s.tx,              s.ty);
-  ctx.lineTo(s.tx - nx * wRod, s.ty - ny * wRod);
-  ctx.lineTo(s.x - nx * wRod,  s.y - ny * wRod);
+  ctx.moveTo(px,             py);
+  ctx.lineTo(tx,             ty);
+  ctx.lineTo(tx - nx * wRod, ty - ny * wRod);
+  ctx.lineTo(px - nx * wRod, py - ny * wRod);
   ctx.closePath();
   ctx.fill();
 
   // Flat end cap — a rectangular rod ends square, not in a rounded point.
   ctx.fillStyle = "#e2e8f0";
   ctx.beginPath();
-  ctx.moveTo(s.tx + nx * wRod, s.ty + ny * wRod);
-  ctx.lineTo(s.tx - nx * wRod, s.ty - ny * wRod);
-  ctx.lineTo(s.tx - nx * wRod + ux * 3, s.ty - ny * wRod + uy * 3);
-  ctx.lineTo(s.tx + nx * wRod + ux * 3, s.ty + ny * wRod + uy * 3);
+  ctx.moveTo(tx + nx * wRod, ty + ny * wRod);
+  ctx.lineTo(tx - nx * wRod, ty - ny * wRod);
+  ctx.lineTo(tx - nx * wRod + ux * 3, ty - ny * wRod + uy * 3);
+  ctx.lineTo(tx + nx * wRod + ux * 3, ty + ny * wRod + uy * 3);
   ctx.closePath();
   ctx.fill();
 
@@ -922,8 +942,8 @@ function drawSaber(s, color) {
   ctx.lineWidth = 12 * dep;
   ctx.lineCap = "butt";
   ctx.beginPath();
-  ctx.moveTo(s.x, s.y);
-  ctx.lineTo(s.x - ux * 26 * dep, s.y - uy * 26 * dep);
+  ctx.moveTo(px, py);
+  ctx.lineTo(px - ux * 26 * dep, py - uy * 26 * dep);
   ctx.stroke();
 
   // Contact point on the palm centre — the thing that actually registers
@@ -935,9 +955,9 @@ function drawSaber(s, color) {
   ctx.shadowBlur = on ? 30 : 16; ctx.shadowColor = color;
   ctx.strokeStyle = color;
   ctx.lineWidth = on ? 5 : 3;
-  ctx.beginPath(); ctx.arc(s.x, s.y, rr, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(s.x, s.y, 6 * dep, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(px, py, 6 * dep, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
@@ -1202,6 +1222,7 @@ function assignSabers(kept, now, dt) {
       s.active = false;
       s.speed = s.vx = s.vy = 0;
       s.trail.length = 0;
+      s.dispReady = false;
     }
   }
 }
@@ -1221,6 +1242,7 @@ function update(s, h, now, dt) {
     s.ptx = h.tx; s.pty = h.ty;
     s.vx = s.vy = 0; s.speed = 0;
     s.trail.length = 0;
+    s.dispReady = false;
   } else if (Math.hypot(h.x - s.x, h.y - s.y) / dt > settings.maxHandSpeed) {
     // The hand appears to have teleported. Real arms do not move this fast, so
     // this is a tracking discontinuity: the detector swapped which hand is
@@ -1233,6 +1255,7 @@ function update(s, h, now, dt) {
     s.ptx = h.tx; s.pty = h.ty;
     s.vx = s.vy = 0; s.speed = 0;
     s.trail.length = 0;
+    s.dispReady = false;
   } else {
     s.px = s.x; s.py = s.y;
     s.ptx = s.tx; s.pty = s.ty;
@@ -1297,8 +1320,8 @@ function pointSegDist(px, py, ax, ay, bx, by) {
 // so contact anywhere along the saber counts.
 function saberDist(s, x, y) {
   return Math.min(
-    pointSegDist(x, y, s.ptx, s.pty, s.tx, s.ty), // tip swept path
-    pointSegDist(x, y, s.x, s.y, s.tx, s.ty)      // current blade
+    pointSegDist(x, y, s.dispPTX, s.dispPTY, s.dispTX, s.dispTY), // tip swept path
+    pointSegDist(x, y, s.dispX, s.dispY, s.dispTX, s.dispTY)      // current rod
   );
 }
 
@@ -1309,7 +1332,7 @@ function saberDist(s, x, y) {
 // can be retreating from a bomb and still clip it with a tip you are not really
 // steering. A player aims their hand, so a bomb should only punish the hand.
 function handDist(s, x, y) {
-  return pointSegDist(x, y, s.px, s.py, s.x, s.y);
+  return pointSegDist(x, y, s.dispPX, s.dispPY, s.dispX, s.dispY);
 }
 
 function checkHits(key) {
@@ -1383,33 +1406,22 @@ function checkHits(key) {
    10. MAIN FRAME — driven by MediaPipe results
    ========================================================================== */
 
+// MediaPipe calls this once per processed frame. camera_utils.js (see
+// lib/camera_utils/camera_utils.js) does not capture the next frame until
+// hands.send() for this one has fully resolved, so this callback's own rate
+// is a hard ceiling — modelComplexity 1 typically lands somewhere in the
+// 15-30fps range depending on the machine. Everything genuinely tied to a
+// hand *sample* lives here; everything else (rendering, note motion, hit
+// checks) has been moved out to tick() below so the game itself is not
+// held to that ceiling.
 function onResults(res) {
-  // FPS.
   const t = frameNow();
-  frameTimes.push(t);
-  while (frameTimes.length && frameTimes[0] < t - 1000) frameTimes.shift();
-  fpsValue = frameTimes.length;
+  trackFrameTimes.push(t);
+  while (trackFrameTimes.length && trackFrameTimes[0] < t - 1000) trackFrameTimes.shift();
+  trackFpsValue = trackFrameTimes.length;
 
-  // Mirror the camera so the player's movements match what they see.
-  // The raw buffer is mirrored too, so wrist sampling and drawing share
-  // one coordinate space.
-  rawCtx.save();
-  rawCtx.translate(W, 0); rawCtx.scale(-1, 1);
-  rawCtx.drawImage(res.image, 0, 0, W, H);
-  rawCtx.restore();
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.save();
-  ctx.globalAlpha = 0.45;
-  ctx.drawImage(raw, 0, 0, W, H);
-  ctx.restore();
-  ctx.fillStyle = "rgba(2,6,23,0.35)";
-  ctx.fillRect(0, 0, W, H);
-
-  // ---- hands ----
-  const dt = Math.min(0.1, Math.max(0.008, (t - lastFrame) / 1000)) ;
-  lastFrame = t;
-  peakSwing *= 0.94;
+  const dt = Math.min(0.1, Math.max(0.008, (t - lastHandFrame) / 1000));
+  lastHandFrame = t;
 
   const list = [];
   if (res.multiHandLandmarks) {
@@ -1419,7 +1431,7 @@ function onResults(res) {
       // per-landmark noise, and it is the point a player actually thinks of as
       // "my hand", so what they aim with is what registers. The old contact
       // point sat 2.3x beyond the wrist along the hand axis, which is why the
-      // saber never felt lined up: you were aiming with a spot in mid-air.
+      // rod never felt lined up: you were aiming with a spot in mid-air.
       let px = 0, py = 0;
       for (const i of [0, 5, 9, 13, 17]) {
         px += (1 - lm[i].x) * W;
@@ -1427,7 +1439,7 @@ function onResults(res) {
       }
       px /= 5; py /= 5;
 
-      // Blade points along the rigid wrist-to-middle-knuckle axis. Length
+      // Rod points along the rigid wrist-to-middle-knuckle axis. Length
       // tracks apparent hand size so it looks right at any distance.
       const wx = (1 - lm[0].x) * W, wy = lm[0].y * H;
       const kx = (1 - lm[9].x) * W, ky = lm[9].y * H;
@@ -1435,12 +1447,12 @@ function onResults(res) {
       const mag = Math.hypot(dx, dy) || 1;
       dx /= mag; dy /= mag;
       const span = handSpan(lm);
-      const blade = Math.max(70, Math.min(190, span * H * 1.5));
+      const rodLen = Math.max(70, Math.min(190, span * H * 1.5));
 
       list.push({
         lm, span,
-        x: px, y: py,                          // contact point
-        tx: px + dx * blade, ty: py + dy * blade,  // blade tip
+        x: px, y: py,                            // contact point
+        tx: px + dx * rodLen, ty: py + dy * rodLen, // rod tip
       });
     }
   }
@@ -1451,12 +1463,68 @@ function onResults(res) {
     ? kept.length + " HAND" + (kept.length > 1 ? "S" : "") + " LOCKED"
     : "NO HANDS";
   el("tracking").className = kept.length ? "live" : "lost";
-  el("fps").textContent = fpsValue + " FPS";
 
   if (phase === "calib") {
     el("calibRead").textContent = lastBrightness === null
       ? "—" : lastBrightness.toFixed(0);
     el("speedRead").textContent = peakSwing.toFixed(0);
+  }
+}
+
+// The actual game loop, driven by requestAnimationFrame instead of the
+// MediaPipe callback. This is what makes the game feel smooth independent of
+// hand-tracking speed: video, note motion, collision and drawing all run at
+// full display refresh, reading whatever the latest hand sample happens to
+// be rather than waiting on the next one.
+function tick() {
+  requestAnimationFrame(tick);
+
+  const t = frameNow();
+  frameTimes.push(t);
+  while (frameTimes.length && frameTimes[0] < t - 1000) frameTimes.shift();
+  fpsValue = frameTimes.length;
+  lastFrame = t;
+  peakSwing *= 0.94;
+
+  // Mirror the camera so the player's movements match what they see. Read
+  // straight from the live <video> element rather than the last MediaPipe
+  // frame, so the picture itself never drops to the inference rate.
+  if (cameraReady) {
+    rawCtx.save();
+    rawCtx.translate(W, 0); rawCtx.scale(-1, 1);
+    rawCtx.drawImage(video, 0, 0, W, H);
+    rawCtx.restore();
+  }
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = 0.45;
+  ctx.drawImage(raw, 0, 0, W, H);
+  ctx.restore();
+  ctx.fillStyle = "rgba(2,6,23,0.35)";
+  ctx.fillRect(0, 0, W, H);
+
+  el("fps").textContent = fpsValue + " FPS · " + trackFpsValue + " TRACK";
+
+  // Extrapolate each rod a short distance beyond its last confirmed sample
+  // using the measured velocity, capped so a stale reading cannot run away.
+  // This is what lets the rod glide smoothly at 60fps between hand samples
+  // that may only arrive 15-30 times a second, without inventing motion the
+  // hand did not make.
+  for (const key of ["left", "right"]) {
+    const s = sabers[key];
+    if (!s.active) continue;
+    const since = Math.min(0.08, Math.max(0, (t - s.seen) / 1000));
+    const nx = s.x + s.vx * since, ny = s.y + s.vy * since;
+    const ntx = s.tx + s.vx * since, nty = s.ty + s.vy * since;
+    if (!s.dispReady) {
+      s.dispPX = nx; s.dispPY = ny; s.dispPTX = ntx; s.dispPTY = nty;
+      s.dispReady = true;
+    } else {
+      s.dispPX = s.dispX; s.dispPY = s.dispY;
+      s.dispPTX = s.dispTX; s.dispPTY = s.dispTY;
+    }
+    s.dispX = nx; s.dispY = ny; s.dispTX = ntx; s.dispTY = nty;
   }
 
   // ---- world ----
@@ -1486,7 +1554,7 @@ function onResults(res) {
       }
     }
 
-    // Work out which blocks are live and which one each saber is lined up
+    // Work out which blocks are live and which one each rod is lined up
     // with, before drawing, so the block itself can show that state.
     sabers.left.onTarget = sabers.right.onTarget = false;
     for (const n of active) {
@@ -1528,6 +1596,7 @@ function onResults(res) {
   // Safety net: if the audio ends first, close the run out.
   if (phase === "playing" && audio.ended) endTrack();
 }
+requestAnimationFrame(tick);
 
 /* ==========================================================================
    10b. DEBUG HOOK
@@ -1553,6 +1622,7 @@ window.__debug = {
     score = combo = bestCombo = hits = misses = bombHits = wrongHits = 0;
     sabers.left = newSaber(); sabers.right = newSaber();
     lastFrame = frameNow();
+    lastHandFrame = frameNow();
     phase = "playing";
     updateHUD();
     menu.classList.add("hidden");
@@ -1593,6 +1663,7 @@ async function boot() {
       width: 960, height: 640,
     });
     await cam.start();
+    cameraReady = true;
     phase = "menu";
     el("btnStart").disabled = false;
   } catch (e) {

@@ -592,17 +592,22 @@ function spawnSlice(x, y, size, color, vx, vy) {
   const nx = -uy, ny = ux;                   // perpendicular: halves separate here
   const ang = Math.atan2(uy, ux);
 
+  // Harder swings throw the halves further, faster, and spinning harder —
+  // the cut should visibly carry the weight of the swing that made it
+  // instead of always playing identically regardless of how it was hit.
+  const power = Math.min(2.2, Math.max(0.7, mag / 900));
+
   for (const s of [1, -1]) {
     shards.push({
       x, y, size,
-      vx: nx * s * 4.6 + ux * 2.2,
-      vy: ny * s * 4.6 + uy * 2.2 + 0.6,
-      rot: ang, spin: s * 0.12,
+      vx: (nx * s * 4.6 + ux * 2.2) * power,
+      vy: (ny * s * 4.6 + uy * 2.2) * power + 0.6,
+      rot: ang, spin: s * 0.12 * power,
       cut: ang, half: s,
       life: 26, max: 26, color,
     });
   }
-  slashes.push({ x, y, ux, uy, len: size * 2.4, life: 9, max: 9, color });
+  slashes.push({ x, y, ux, uy, len: size * (2.0 + 0.5 * power), life: 9, max: 9, color });
 }
 
 /* ==========================================================================
@@ -1362,13 +1367,20 @@ function checkHits(key) {
 
     if (n.progress < HIT_MIN || n.progress > HIT_MAX) continue;
     if (saberDist(s, pos.x, pos.y) > HIT_RADIUS) continue;
-    
-    // OVERLAP AUTO-SLASH: Removed s.speed < settings.minSwing requirement.
-    // If the saber simply overlaps the block, it slices instantly.
+
+    // A block only cuts on an actual swing through it — resting the rod on
+    // top of it, or drifting past slowly, is not a slash. Without this, every
+    // hit felt the same regardless of how you played: touch equals cut, so
+    // there was nothing to actually swing for. settings.minSwing is the same
+    // value tuned on the CALIBRATE screen (SWING SENSITIVITY), which
+    // previously had nothing reading it.
+    if (s.speed < settings.minSwing) continue;
 
     // Left saber owns the red lanes, right saber the cyan ones. Cutting a
     // block with the wrong saber is a real mistake, not a non-event: it now
-    // destroys the block and counts against the run.
+    // destroys the block and counts against the run. Gated on the swing
+    // check above too — brushing the wrong-colour block without swinging at
+    // it shouldn't cost anything.
     if ((n.lane < 2 ? "left" : "right") !== key) {
       wrongHits++;
       combo = 0;
@@ -1382,7 +1394,20 @@ function checkHits(key) {
       continue;
     }
 
-    // OVERLAP AUTO-SLASH: Removed directionOK requirement.
+    // Arcade only — directionOK is unconditionally true in Casual. A real
+    // swing that crosses the block on the wrong axis is a failed cut, not a
+    // free pass: it counts as a miss straight away instead of leaving the
+    // block hanging for the player to try again.
+    if (!directionOK(n, s.vx, s.vy)) {
+      misses++;
+      combo = 0;
+      burst(pos.x, pos.y, "#94a3b8", 14);
+      popup(pos.x, pos.y - 40, "WRONG WAY", "#94a3b8");
+      active.splice(i, 1);
+      updateHUD();
+      if (checkFail()) return;
+      continue;
+    }
 
     // Timing bonus: closest to progress 1.0 scores best.
     const off = Math.abs(n.progress - 1.0);
@@ -1394,7 +1419,11 @@ function checkHits(key) {
     score += Math.round((perfect ? 150 : 100) * mult);
 
     const color = n.lane < 2 ? COLOR_L : COLOR_R;
-    burst(pos.x, pos.y, color, perfect ? 30 : 20);
+    // Scale the burst with how hard the swing actually was, same as the
+    // shards below — a bare-minimum-speed tap should not throw the same
+    // shower of sparks as a full swing.
+    const power = Math.min(2.2, Math.max(0.7, s.speed / 900));
+    burst(pos.x, pos.y, color, Math.round((perfect ? 30 : 20) * power));
     spawnSlice(pos.x, pos.y, NOTE_SIZE * pos.scale, color, s.vx, s.vy);
     popup(pos.x, pos.y - 40, perfect ? "PERFECT " + mult + "x" : "+" + (100 * mult), color);
     active.splice(i, 1);

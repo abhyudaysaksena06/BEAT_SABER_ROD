@@ -307,6 +307,19 @@ fade — with a white slash streak drawn along the path the saber travelled, plu
 the particle burst. The block is halved along the axis you actually swung, so
 the slice matches the motion that caused it.
 
+**A block only cuts on an actual swing.** `checkHits` used to register a hit on
+overlap alone — resting the rod on a block, or drifting past it slowly, sliced
+it exactly the same as a real swing. That made every cut feel identical
+regardless of how it was played, and left the CALIBRATE screen's SWING
+SENSITIVITY slider adjusting a setting (`settings.minSwing`) nothing actually
+read. The speed check is back: a block only cuts once `s.speed` clears
+`minSwing`, so the rod has to be moving to register as a slash. In Arcade a
+fast swing on the wrong axis now fails the block as a miss instead of a free
+hit, rather than only checking direction when the auto-slash path made it
+irrelevant. Shard velocity, spin, slash length, and the particle burst all
+scale with how hard the swing actually was, so a bare-minimum-speed tap reads
+as a lighter cut than a full swing.
+
 ### Crowd filter
 
 Three modes, since the stall is the hard case:

@@ -1,0 +1,12 @@
+# Build-time / local-only files — not needed by the browser.
+tools/
+.claude/
+start.bat
+
+# Optional extra savings, if you want a smaller deploy. Both are currently
+# LEFT IN on purpose:
+#   lib/hands/hand_landmark_lite.tflite      1.98 MB - unused at modelComplexity 1
+#   lib/hands/hands_solution_wasm_bin.*      5.90 MB - non-SIMD fallback build
+# The fallback is what runs on a browser without WASM SIMD. Every current
+# browser has it, but dropping the fallback means those machines fail outright
+# rather than running slowly, so it stays unless you need the space.

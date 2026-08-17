@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AR BEAT SABER — LEAD Society Tech Ops</title>
+<style>
+  :root {
+    --bg: #020617;
+    --panel: #0b1222;
+    --edge: #0284c7;
+    --cyan: #22d3ee;
+    --red: #ff2d6f;
+    --green: #22c55e;
+    --gold: #facc15;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 700px at 50% -10%, #0b2a44 0%, transparent 60%),
+      var(--bg);
+    color: #cbd5e1;
+    font-family: 'Courier New', ui-monospace, monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #shell { width: 960px; max-width: 98vw; }
+
+  #hud {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+    padding: 10px 18px;
+    background: linear-gradient(180deg, #0f172a, #0b1222);
+    border: 2px solid var(--edge);
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
+  }
+  .stat { text-align: center; }
+  .stat .k { font-size: 11px; letter-spacing: 2px; color: #64748b; }
+  .stat .v { font-size: 26px; font-weight: bold; line-height: 1.1; }
+
+  #stage { position: relative; line-height: 0; }
+  video { display: none; }
+  #canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 2px solid var(--edge);
+    border-radius: 0 0 10px 10px;
+    box-shadow: 0 0 60px rgba(2,132,199,0.45);
+    background: #000;
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.93);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.5;
+    padding: 24px;
+    border-radius: 0 0 10px 10px;
+    z-index: 5;
+  }
+  .overlay.hidden { display: none; }
+
+  h1 {
+    margin: 0 0 6px;
+    font-size: 40px;
+    color: #e2e8f0;
+    letter-spacing: 4px;
+    text-shadow: 0 0 24px var(--cyan);
+  }
+  h2 { margin: 4px 0 14px; font-size: 18px; color: #7dd3fc; letter-spacing: 2px; font-weight: normal; }
+
+  .btn {
+    background: linear-gradient(180deg, #0ea5e9, #0369a1);
+    color: #fff;
+    border: none;
+    padding: 14px 30px;
+    margin: 7px;
+    font-size: 18px;
+    font-family: inherit;
+    font-weight: bold;
+    letter-spacing: 2px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .btn:hover:not(:disabled) { filter: brightness(1.25); box-shadow: 0 0 22px var(--cyan); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.ghost { background: transparent; border: 2px solid #334155; color: #94a3b8; }
+  .btn.small { padding: 9px 18px; font-size: 14px; }
+
+  .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+  .card {
+    background: rgba(15,23,42,0.85);
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin: 8px 0;
+    max-width: 620px;
+  }
+  .lbl { font-size: 12px; letter-spacing: 2px; color: #64748b; margin-bottom: 6px; }
+  .hint { font-size: 13px; color: #64748b; max-width: 620px; }
+  .warn { color: #fca5a5; }
+
+  .seg { display: inline-flex; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
+  .seg button {
+    background: transparent; border: none; color: #94a3b8;
+    padding: 9px 16px; font-family: inherit; font-size: 13px;
+    letter-spacing: 1px; cursor: pointer;
+  }
+  .seg button.on { background: var(--edge); color: #fff; font-weight: bold; }
+
+  input[type=range] { width: 240px; vertical-align: middle; accent-color: var(--cyan); }
+
+  #statusbar {
+    display: flex; justify-content: space-between; align-items: center;
+    width: 100%; padding: 8px 6px 0; font-size: 12px; color: #475569;
+  }
+  #tracking.live { color: var(--green); }
+  #tracking.lost { color: #f59e0b; }
+
+  table.stats { border-collapse: collapse; margin: 6px auto 14px; font-size: 15px; }
+  table.stats td { padding: 5px 18px; }
+  table.stats td:first-child { color: #64748b; text-align: right; letter-spacing: 1px; }
+  table.stats td:last-child { text-align: left; font-weight: bold; color: #e2e8f0; }
+</style>
+</head>
+<body>
+
+<div id="shell">
+  <div id="hud">
+    <div class="stat"><div class="k">SCORE</div><div class="v" id="uiScore" style="color:var(--green)">0</div></div>
+    <div class="stat"><div class="k">COMBO</div><div class="v" id="uiCombo" style="color:var(--gold)">0x</div></div>
+    <div class="stat"><div class="k">ACCURACY</div><div class="v" id="uiAcc" style="color:var(--cyan)">100%</div></div>
+    <div class="stat"><div class="k">MISSES</div><div class="v" id="uiMiss" style="color:var(--red)">0/5</div></div>
+    <div class="stat"><div class="k">BOMBS</div><div class="v" id="uiBomb" style="color:var(--red)">0/3</div></div>
+    <div class="stat"><div class="k">BAD CUT</div><div class="v" id="uiWrong" style="color:var(--red)">0/3</div></div>
+  </div>
+
+  <div id="stage">
+    <video id="webcam" playsinline muted></video>
+    <canvas id="canvas" width="960" height="640"></canvas>
+
+    <!-- ===== MENU ===== -->
+    <div class="overlay" id="menu">
+      <h1>AR BEAT SABER</h1>
+      <h2>SURVIVOR — EYE OF THE TIGER</h2>
+
+      <div class="card">
+        <div class="lbl">DIFFICULTY</div>
+        <div class="seg" id="segDiff">
+          <button data-v="casual" class="on">CASUAL</button>
+          <button data-v="arcade">ARCADE</button>
+        </div>
+        <div class="hint" style="margin-top:8px" id="diffHint">
+          Casual — slash any direction, just hit with the rod on the matching side.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="lbl">MODE</div>
+        <div class="seg" id="segMode">
+          <button data-v="normal" class="on">NORMAL</button>
+          <button data-v="practice">PRACTICE</button>
+        </div>
+        <div class="hint" style="margin-top:8px" id="modeHint">
+          Normal — the run ends after 5 misses, 3 bombs or 3 wrong-hand cuts.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="lbl">CROWD FILTER</div>
+        <div class="seg" id="segFilter">
+          <button data-v="closest" class="on">CLOSEST HANDS</button>
+          <button data-v="glove">BLACK GLOVES</button>
+          <button data-v="off">OFF</button>
+        </div>
+        <div class="hint" style="margin-top:8px" id="filterHint">
+          Keeps only the two largest hands — the player stands nearest the camera, so background spectators are ignored. No props needed.
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <button class="btn" id="btnStart" disabled>STARTING CAMERA…</button>
+        <button class="btn ghost small" id="btnCalib">CALIBRATE</button>
+      </div>
+      <div class="hint warn" id="menuErr" style="margin-top:10px"></div>
+    </div>
+
+    <!-- ===== CALIBRATION ===== -->
+    <div class="overlay hidden" id="calib">
+      <h1 style="font-size:30px">CALIBRATION</h1>
+      <div class="card">
+        <div class="lbl">GLOVE CALIBRATION</div>
+        <label style="display: block; margin-bottom: 10px; font-size: 15px; color: #e2e8f0;">
+          Target Color: 
+          <input type="color" id="glove-color" value="#000000" style="vertical-align: middle; cursor: pointer; border: none; padding: 0; background: transparent;">
+        </label>
+        <label style="display: block; font-size: 15px; color: #e2e8f0;">
+          Tolerance (Spread): <span id="tol-val">75</span>
+          <br>
+          <input type="range" id="glove-tolerance" min="10" max="200" value="75" style="margin-top: 8px; width: 240px; accent-color: var(--cyan);">
+        </label>
+        <div class="hint" style="margin-top:10px">
+          Hold your hands up. Live wrist color distance:
+          <b id="calibRead" style="color:var(--cyan)">—</b><br>
+          Set target color to match the glove under current lighting, and set tolerance above the live distance reading.
+        </div>
+      </div>
+      <div class="card">
+        <div class="lbl">SWING SENSITIVITY — <span id="speedVal">450</span> px/sec</div>
+        <input type="range" id="speedSlider" min="150" max="1500" step="25" value="450">
+        <div class="hint" style="margin-top:10px">
+          Lower = easier to register a slash. Live peak swing speed:
+          <b id="speedRead" style="color:var(--cyan)">0</b><br>
+          Swing as you would in game and set this to about half your peak.
+        </div>
+      </div>
+      <div class="card">
+        <div class="lbl">TIMING OFFSET — <span id="offVal">0</span> ms</div>
+        <input type="range" id="offSlider" min="-300" max="300" step="10" value="0">
+        <div class="hint" style="margin-top:10px">
+          If blocks feel like they arrive before or after the beat, trim it
+          here. Negative = blocks arrive earlier.
+        </div>
+      </div>
+      <button class="btn" id="btnCalibDone">DONE</button>
+    </div>
+
+    <!-- ===== RESULTS ===== -->
+    <div class="overlay hidden" id="results">
+      <h1 id="resRank">TRACK COMPLETE</h1>
+      <h2 id="resWhy" style="color:var(--red);display:none"></h2>
+      <table class="stats">
+        <tr><td>SCORE</td><td id="resScore">0</td></tr>
+        <tr><td>ACCURACY</td><td id="resAcc">0%</td></tr>
+        <tr><td>NOTES HIT</td><td id="resHit">0</td></tr>
+        <tr><td>BEST COMBO</td><td id="resCombo">0</td></tr>
+        <tr><td>BOMBS HIT</td><td id="resBomb">0</td></tr>
+        <tr><td>WRONG-HAND CUTS</td><td id="resWrong">0</td></tr>
+      </table>
+      <button class="btn" id="btnAgain">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <div id="statusbar">
+    <div>LEAD SOCIETY TECH OPS · ABHYUDAY SAKSENA · 1025030923 · COE</div>
+    <div><span id="tracking">NO HANDS</span> · <span id="fps">-- FPS</span></div>
+  </div>
+</div>
+
+<audio id="gameAudio" preload="auto"></audio>
+
+<!-- MediaPipe, served from ./lib so the stall build needs no network -->
+<script src="lib/camera_utils/camera_utils.js"></script>
+<script src="lib/hands/hands.js"></script>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   1. CONFIGURATION
+   ========================================================================== */
+
+const W = 960, H = 640;
+
+const PRE_SPAWN   = 3.5;   // seconds a note travels from far away to the player
+const HIT_MIN     = 0.98;  // progress window in which a note can be struck (wait until it reaches the ring)
+const HIT_MAX     = 1.25;  // extremely forgiving late hit window
+const CULL        = 1.50;  // progress at which a note is gone for good
+const HIT_RADIUS  = 110;   // px, generous for overlap-based slicing
+const BOMB_RADIUS = 54;
+
+// Fail limits — defaults; live values sit in `settings` so they can be tuned
+// at the stall without editing code (__debug.set({ maxMisses: 10 })).
+const MAX_MISSES = 5;
+const MAX_BOMBS  = 3;
+const MAX_WRONG  = 3;
+
+// The play field sits in the middle band of the frame, NOT the lower half.
+// Blocks used to travel down and off the bottom edge, which forced the player
+// to chase them below the camera's view — the hand leaves frame, tracking dies,
+// and the block is unhittable through no fault of the player. Everything now
+// stays between y=190 and y=410 of a 640px frame, which is where raised hands
+// actually are.
+const CENTER = { x: W / 2, y: 300 };
+const LANE_X = [225, 385, 575, 735];
+const ROW_Y  = [190, 300, 410];
+
+// True perspective: notes travel toward the camera at constant speed, so depth
+// falls linearly while apparent size goes as 1/z. Distant blocks are ~29% the
+// size of one at the strike point and creep along; near ones are big and move
+// fast. Linear interpolation (the old behaviour) has no sense of depth at all.
+const Z_FAR  = 3.5;
+const Z_NEAR = 1.0;
+const NOTE_SIZE = 92;      // px at the strike point
+const RING_FROM = 0.35;    // travel progress at which the approach ring appears
+
+const COLOR_L = "#ff2d6f";   // left hand / lanes 0-1
+const COLOR_R = "#22d3ee";   // right hand / lanes 2-3
+
+const settings = {
+  difficulty: "casual",   // casual | arcade
+  mode: "normal",         // normal | practice — practice ignores the fail limits
+  filter: "closest",      // closest | glove | off
+  gloveColor: "#000000",
+  gloveTolerance: 75,
+  // Swing threshold is in pixels per SECOND, not per frame. Per-frame was a
+  // real bug: the same physical swing reads ~3x larger at 60fps than at 20fps,
+  // so the game got harder or easier depending on how busy the laptop was.
+  minSwing: 450,
+  offsetMs: 0,            // audio/visual latency trim
+  // Above this the sample is a tracking glitch, not a swing. A hard slash
+  // moves the palm ~2000 px/s; a detector hand-swap looks like 20000+.
+  maxHandSpeed: 6500,
+  maxMisses: MAX_MISSES,
+  maxBombs: MAX_BOMBS,
+  maxWrong: MAX_WRONG,
+};
+
+/* ==========================================================================
+   2. DOM + STATE
+   ========================================================================== */
+
+const video  = document.getElementById("webcam");
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+const audio  = document.getElementById("gameAudio");
+
+const el = id => document.getElementById(id);
+const menu = el("menu"), calib = el("calib"), results = el("results");
+
+// Raw, un-composited camera frame. Glove sampling MUST read this and not the
+// visible canvas — by the time we sample, the visible canvas already has the
+// dimmed overlay, highway lines and glowing notes painted on top of the video,
+// which would corrupt every pixel reading.
+const raw = document.createElement("canvas");
+raw.width = W; raw.height = H;
+const rawCtx = raw.getContext("2d", { willReadFrequently: true });
+
+let beatmap = null;
+let phase = "boot";        // boot | menu | calib | countdown | playing | done
+let pending = [];          // notes not yet spawned
+let active  = [];          // notes in flight
+let particles = [];
+let popups = [];
+let shards = [];       // block halves flying apart after a cut
+let slashes = [];      // streak drawn along the swing path
+
+let score = 0, combo = 0, bestCombo = 0;
+let hits = 0, misses = 0, bombHits = 0, wrongHits = 0, totalTargets = 0;
+let countdownEnd = 0;
+let flash = null;
+
+// Two sabers, assigned by on-screen position rather than MediaPipe's
+// handedness label (see assignSabers).
+function newSaber() {
+  return {
+    active: false, seen: 0,
+    x: 0, y: 0,          // smoothed palm centre — the contact point
+    px: 0, py: 0,        // contact point last frame (swept-collision segment)
+    tx: 0, ty: 0,        // smoothed blade tip
+    ptx: 0, pty: 0,      // tip last frame
+    vx: 0, vy: 0,        // px/second
+    span: 0.2,           // apparent hand size — stands in for distance
+    onTarget: false,     // lined up with a live block right now
+    speed: 0, trail: [],
+  };
+}
+const sabers = { left: newSaber(), right: newSaber() };
+
+let lastFrame = 0;       // timestamp of previous frame, for real dt
+
+let peakSwing = 0, lastBrightness = null;
+let frameTimes = [], fpsValue = 0;
+
+// Song clock. Normally the audio element drives everything; the debug hook
+// can pin it to a fixed value to step the game deterministically.
+let timeOverride = null;
+const songTime = () =>
+  timeOverride !== null ? timeOverride
+                        : audio.currentTime + settings.offsetMs / 1000;
+
+// Wall clock for frame pacing (dt, tracking dropout). Overridable so tests can
+// step frames at a chosen frame rate instead of whatever speed they happen to
+// loop at.
+let nowOverride = null;
+const frameNow = () => nowOverride !== null ? nowOverride : performance.now();
+
+/* ==========================================================================
+   3. SETUP / UI WIRING
+   ========================================================================== */
+
+function segment(containerId, key, onChange) {
+  const box = el(containerId);
+  box.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    [...box.children].forEach(c => c.classList.toggle("on", c === b));
+    settings[key] = b.dataset.v;
+    if (onChange) onChange(b.dataset.v);
+  });
+}
+
+segment("segDiff", "difficulty", v => {
+  el("diffHint").textContent = v === "casual"
+    ? "Casual — slash any direction, just hit with the rod on the matching side."
+    : "Arcade — the slash must follow the arrow on the block, like real Beat Saber.";
+});
+
+segment("segMode", "mode", v => {
+  el("modeHint").textContent = v === "normal"
+    ? "Normal — the run ends after 5 misses, 3 bombs or 3 wrong-hand cuts."
+    : "Practice — nothing ends the run. Misses and bombs still cost score and "
+      + "break the combo, but you always play the track to the end.";
+});
+
+segment("segFilter", "filter", v => {
+  el("filterHint").textContent = {
+    closest: "Keeps only the two largest hands — the player stands nearest the camera, so background spectators are ignored. No props needed.",
+    glove:   "Player wears black gloves; any hand whose wrist pixel is not dark is culled. Tune the threshold under CALIBRATE for the stall's lighting.",
+    off:     "No filtering — every detected hand controls a saber. Fine for testing at a desk, risky in a crowd.",
+  }[v];
+});
+
+el("glove-color").addEventListener("input", e => {
+  settings.gloveColor = e.target.value;
+});
+el("glove-tolerance").addEventListener("input", e => {
+  settings.gloveTolerance = +e.target.value;
+  el("tol-val").textContent = e.target.value;
+});
+el("speedSlider").addEventListener("input", e => {
+  settings.minSwing = +e.target.value;
+  el("speedVal").textContent = e.target.value;
+});
+el("offSlider").addEventListener("input", e => {
+  settings.offsetMs = +e.target.value;
+  el("offVal").textContent = e.target.value;
+});
+
+el("btnCalib").addEventListener("click", () => {
+  phase = "calib"; menu.classList.add("hidden"); calib.classList.remove("hidden");
+});
+el("btnCalibDone").addEventListener("click", () => {
+  phase = "menu"; calib.classList.add("hidden"); menu.classList.remove("hidden");
+});
+el("btnStart").addEventListener("click", startGame);
+el("btnAgain").addEventListener("click", () => {
+  results.classList.add("hidden"); menu.classList.remove("hidden"); phase = "menu";
+});
+
+/* ==========================================================================
+   4. GAME FLOW
+   ========================================================================== */
+
+async function loadBeatmap() {
+  const res = await fetch("beatmap.json");
+  if (!res.ok) throw new Error("beatmap.json not found (HTTP " + res.status + ")");
+  beatmap = await res.json();
+  audio.src = beatmap.audio;
+  el("btnStart").textContent = "START — " + beatmap.title.toUpperCase();
+}
+
+function startGame() {
+  pending = beatmap.notes.map(n => Object.assign({}, n));
+  totalTargets = pending.filter(n => n.type === "target").length;
+  active = []; particles = []; popups = []; shards = []; slashes = [];
+  score = combo = bestCombo = hits = misses = bombHits = wrongHits = 0;
+  flash = null;
+  sabers.left = newSaber(); sabers.right = newSaber();
+  updateHUD();
+
+  menu.classList.add("hidden");
+  results.classList.add("hidden");
+  phase = "countdown";
+  countdownEnd = performance.now() + 3200;
+
+  audio.currentTime = 0;
+}
+
+function beginTrack() {
+  phase = "playing";
+  audio.play().catch(err => {
+    el("menuErr").textContent = "Audio blocked: " + err.message;
+    phase = "menu"; menu.classList.remove("hidden");
+  });
+}
+
+function endTrack(failReason) {
+  if (phase === "done") return true;
+  phase = "done";
+  audio.pause();
+  const seen = hits + misses;
+  const acc = seen ? (hits / seen) * 100 : 0;
+  const rank = failReason ? "RUN OVER"
+             : acc >= 95 ? "PERFECT!" : acc >= 85 ? "EXCELLENT"
+             : acc >= 70 ? "GREAT"    : acc >= 50 ? "GOOD" : "TRACK COMPLETE";
+  const practice = settings.mode === "practice";
+  el("resRank").textContent  = rank;
+  el("resRank").style.color  = failReason ? "var(--red)" : "var(--green)";
+  // Flag practice scores so they are not mistaken for a normal-mode result.
+  const note = failReason || (practice ? "PRACTICE RUN — NO FAIL LIMITS" : "");
+  el("resWhy").textContent   = note;
+  el("resWhy").style.color   = failReason ? "var(--red)" : "var(--green)";
+  el("resWhy").style.display = note ? "block" : "none";
+  el("resScore").textContent = score.toLocaleString();
+  el("resAcc").textContent   = acc.toFixed(1) + "%";
+  el("resHit").textContent   = hits + " / " + totalTargets;
+  el("resCombo").textContent = bestCombo + "x";
+  el("resBomb").textContent  = bombHits;
+  el("resWrong").textContent = wrongHits;
+  results.classList.remove("hidden");
+  return true;
+}
+
+// Three ways to end a run early. Kept as one place so every penalty path
+// funnels through the same check.
+function checkFail() {
+  // Practice: penalties still cost score and break the combo, but nothing
+  // ends the run — the player always gets to the end of the track.
+  if (settings.mode === "practice") return false;
+  if (misses    >= settings.maxMisses) return endTrack(settings.maxMisses + " MISSED BLOCKS");
+  if (bombHits  >= settings.maxBombs)  return endTrack(settings.maxBombs + " BOMBS HIT");
+  if (wrongHits >= settings.maxWrong)  return endTrack(settings.maxWrong + " WRONG-HAND CUTS");
+  return false;
+}
+
+function updateHUD() {
+  const seen = hits + misses;
+  el("uiScore").textContent = score.toLocaleString();
+  el("uiCombo").textContent = combo + "x";
+  el("uiAcc").textContent   = (seen ? (hits / seen) * 100 : 100).toFixed(0) + "%";
+  // In practice there is no limit to count toward, so show a plain tally
+  // rather than "0/5", which would imply a cap that is not enforced.
+  const practice = settings.mode === "practice";
+  el("uiMiss").textContent  = practice ? misses    : misses    + "/" + settings.maxMisses;
+  el("uiBomb").textContent  = practice ? bombHits  : bombHits  + "/" + settings.maxBombs;
+  el("uiWrong").textContent = practice ? wrongHits : wrongHits + "/" + settings.maxWrong;
+}
+
+/* ==========================================================================
+   5. EFFECTS
+   ========================================================================== */
+
+function burst(x, y, color, n = 22) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 11;
+    particles.push({
+      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      life: 26 + Math.random() * 14, max: 40,
+      size: 3 + Math.random() * 4, color,
+    });
+  }
+}
+function popup(x, y, text, color) {
+  popups.push({ x, y, text, color, life: 45 });
+}
+
+// Split a block along the cut line and throw the two halves apart. This is
+// what makes a hit read as a *slice* rather than the block simply vanishing.
+function spawnSlice(x, y, size, color, vx, vy) {
+  const mag = Math.hypot(vx, vy) || 1;
+  const ux = vx / mag, uy = vy / mag;        // cut direction
+  const nx = -uy, ny = ux;                   // perpendicular: halves separate here
+  const ang = Math.atan2(uy, ux);
+
+  for (const s of [1, -1]) {
+    shards.push({
+      x, y, size,
+      vx: nx * s * 4.6 + ux * 2.2,
+      vy: ny * s * 4.6 + uy * 2.2 + 0.6,
+      rot: ang, spin: s * 0.12,
+      cut: ang, half: s,
+      life: 26, max: 26, color,
+    });
+  }
+  slashes.push({ x, y, ux, uy, len: size * 2.4, life: 9, max: 9, color });
+}
+
+/* ==========================================================================
+   6. GEOMETRY
+   ========================================================================== */
+
+const perspective = 800;
+const wHalf = W / 2;
+const hHalf = H / 2;
+const spawnZ = 800;
+const strikeZ = 100;
+const travelSpeed = spawnZ - strikeZ;
+
+// Symmetric spread in local 3D space
+const LANE_X_3D = [-30, -10, 10, 30];
+const ROW_Y_3D = [-20, 0, 20];
+
+function noteXYScale(n, p) {
+  if (p > 1) {
+    p = 1 + (p - 1) * 0.15; // Slow drift past player instead of rushing away
+  }
+  let Z3D = Math.max(1, spawnZ - (travelSpeed * p));
+  let X3D = LANE_X_3D[n.lane];
+  let Y3D = ROW_Y_3D[n.row];
+
+  // Perspective divide
+  let X2D = wHalf + (X3D / Z3D) * perspective;
+  let Y2D = hHalf + (Y3D / Z3D) * perspective;
+  
+  // Normalize scale so at strikeZ (p=1.0) it matches the old 1.0 multiplier
+  let scale = (perspective / Z3D) / (perspective / strikeZ);
+
+  return { x: X2D, y: Y2D, scale };
+}
+
+const DIR_VEC = {
+  UP:    { x:  0, y: -1 },
+  DOWN:  { x:  0, y:  1 },
+  LEFT:  { x: -1, y:  0 },
+  RIGHT: { x:  1, y:  0 },
+};
+
+// A slash counts if it travels broadly the right way — within ~70 degrees of
+// the arrow. Demanding an exact axis match is unfair on webcam tracking, where
+// a fast swing is only ever a handful of noisy samples.
+function directionOK(note, vx, vy) {
+  if (settings.difficulty === "casual") return true;
+  if (!note.dir || note.dir === "ANY") return true;
+  const want = DIR_VEC[note.dir];
+  if (!want) return true;
+  const mag = Math.hypot(vx, vy);
+  if (mag < 1e-3) return false;
+  return (vx / mag) * want.x + (vy / mag) * want.y > 0.35;
+}
+
+function roundRectPath(c, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y,     x + w, y + h, r);
+  c.arcTo(x + w, y + h, x,     y + h, r);
+  c.arcTo(x,     y + h, x,     y,     r);
+  c.arcTo(x,     y,     x + w, y,     r);
+  c.closePath();
+}
+
+/* ==========================================================================
+   7. RENDERING
+   ========================================================================== */
+
+function drawHighway() {
+  ctx.save();
+
+  // Guide rails run from the vanishing point out through each lane/row cell,
+  // so the field reads as a tunnel coming at you rather than a road going down.
+  ctx.strokeStyle = "rgba(56,189,248,0.16)";
+  ctx.lineWidth = 2;
+  for (const lane of [0, 1, 2, 3]) {
+    for (const row of [0, 2]) {
+      const s = noteXYScale({ lane, row }, 0); // Spawn point
+      const e = noteXYScale({ lane, row }, 1.5);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(e.x, e.y);
+      ctx.stroke();
+    }
+  }
+
+  // Depth rings: the grid outline at a few distances.
+  for (const p of [0.35, 0.62, 0.85, 1.0]) {
+    const tl = noteXYScale({ lane: 0, row: 0 }, p);
+    const br = noteXYScale({ lane: 3, row: 2 }, p);
+    const s = tl.scale * NOTE_SIZE * 0.5;
+    ctx.strokeStyle = `rgba(56,189,248,${0.07 + 0.16 * p})`;
+    ctx.lineWidth = 1 + 2 * p;
+    roundRectPath(ctx, tl.x - s, tl.y - s,
+                  (br.x - tl.x) + s * 2, (br.y - tl.y) + s * 2, 18 * p + 4);
+    ctx.stroke();
+  }
+
+  // Vanishing point glow — notes emerge from here.
+  const g = ctx.createRadialGradient(wHalf, hHalf, 0, wHalf, hHalf, 130);
+  g.addColorStop(0, "rgba(34,211,238,0.30)");
+  g.addColorStop(1, "rgba(34,211,238,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(wHalf, hHalf, 130, 0, Math.PI * 2); ctx.fill();
+
+  // Strike ring: the depth at which blocks are live.
+  const tl = noteXYScale({ lane: 0, row: 0 }, 1.0);
+  const br = noteXYScale({ lane: 3, row: 2 }, 1.0);
+  const s = NOTE_SIZE * 0.62;
+  ctx.strokeStyle = "rgba(250,204,21,0.34)";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([16, 12]);
+  roundRectPath(ctx, tl.x - s, tl.y - s,
+                (br.x - tl.x) + s * 2, (br.y - tl.y) + s * 2, 26);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawNote(n, p) {
+  const { x, y, scale } = noteXYScale(n, p);
+  const size  = NOTE_SIZE * scale;
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Fade in briefly on spawn so notes do not pop into existence, and fade out
+  // once past the player instead of flying off the edge of the frame.
+  let alpha = 1;
+  if (p < 0.10) alpha = p / 0.10;
+  if (p > 1) alpha = Math.max(0, 1 - (p - 1) / (CULL - 1));
+  ctx.globalAlpha = alpha;
+
+  if (n.type === "bomb") {
+    ctx.shadowBlur = 26 * scale; ctx.shadowColor = "#ef4444";
+    ctx.fillStyle = "#1c1917";
+    ctx.beginPath(); ctx.arc(0, 0, size / 2.3, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 3 * scale; ctx.stroke();
+    ctx.fillStyle = "#ef4444";
+    ctx.font = "bold " + (30 * scale) + "px Courier New";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("✕", 0, 1 * scale);
+    ctx.restore();
+    return;
+  }
+
+  const color = n.lane < 2 ? COLOR_L : COLOR_R;
+
+  // APPROACH RING — a ring that shrinks onto the block and meets its edge at
+  // exactly the moment it becomes hittable. Size alone tells you a block is
+  // getting closer, but not *when* to swing; the ring converging is a hard
+  // deadline you can read at a glance, which is the cue that was missing.
+  if (p > RING_FROM && p < 1.02) {
+    // 1 when the ring first appears, 0 exactly at the strike point. Scaling
+    // this against the hit window instead of the visible approach made the
+    // ring hundreds of pixels wide early on.
+    const lead = Math.min(1, Math.max(0, (1 - p) / (1 - RING_FROM)));
+    const r = size * 0.72 + lead * 88;
+    ctx.save();
+    ctx.globalAlpha = alpha * Math.min(1, (p - RING_FROM) / 0.2) * 0.85;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5 + 2 * (1 - lead);
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
+  // ARMED — the block is inside the hit window right now.
+  if (n.armed) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "#facc15";
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 18; ctx.shadowColor = "#facc15";
+    roundRectPath(ctx, -size / 2 - 9, -size / 2 - 9, size + 18, size + 18, 14);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // LOCKED — your saber is close enough that a swing right now would connect.
+  // This is the direct answer to "where would my saber actually strike".
+  if (n.locked) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 5;
+    ctx.shadowBlur = 30; ctx.shadowColor = "#fff";
+    roundRectPath(ctx, -size / 2 - 16, -size / 2 - 16, size + 32, size + 32, 18);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.shadowBlur = 22 * scale; ctx.shadowColor = color;
+  ctx.fillStyle = color;
+  roundRectPath(ctx, -size / 2, -size / 2, size, size, 10 * scale);
+  ctx.fill();
+
+  // Inner face, so the arrow reads against the glow.
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(0,0,0,0.30)";
+  roundRectPath(ctx, -size / 2 + 5 * scale, -size / 2 + 5 * scale,
+                size - 10 * scale, size - 10 * scale, 7 * scale);
+  ctx.fill();
+
+  // Cut-direction arrow.
+  ctx.fillStyle = "#fff";
+  const u = size / 3.2;
+  ctx.beginPath();
+  if (n.dir === "UP")         { ctx.moveTo(0, -u); ctx.lineTo(-u, u * 0.7); ctx.lineTo(u, u * 0.7); }
+  else if (n.dir === "DOWN")  { ctx.moveTo(0,  u); ctx.lineTo(-u, -u * 0.7); ctx.lineTo(u, -u * 0.7); }
+  else if (n.dir === "LEFT")  { ctx.moveTo(-u, 0); ctx.lineTo(u * 0.7, -u); ctx.lineTo(u * 0.7, u); }
+  else if (n.dir === "RIGHT") { ctx.moveTo( u, 0); ctx.lineTo(-u * 0.7, -u); ctx.lineTo(-u * 0.7, u); }
+  else { ctx.arc(0, 0, u * 0.55, 0, Math.PI * 2); }
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSaber(s, color) {
+  if (!s.active) return;
+
+  // Apparent hand size stands in for how far forward the hand is. Reaching
+  // toward the camera thickens the rod, pulling back thins it. A flat line
+  // of constant width sits *on* the picture; one that breathes with distance
+  // sits *in* it, which is the difference the 2D prop was missing.
+  // 0.16 is roughly the measured span of a hand at comfortable playing
+  // distance, so a normal stance sits near 1.0 and reaching in or out moves
+  // visibly either side of it.
+  const dep = Math.min(1.7, Math.max(0.65, s.span / 0.16));
+
+  const dx = s.tx - s.x, dy = s.ty - s.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;      // along the rod
+  const nx = -uy, ny = ux;                 // across it
+
+  // The rod has a rectangular cross section, so it does not taper toward the
+  // tip the way a blade does — both ends of the shaft are the same width.
+  const wRod = 9 * dep;
+
+  ctx.save();
+  ctx.lineJoin = "miter";
+  ctx.lineCap = "butt";
+
+  // Motion trail: same uniform width as the rod, faint and colour-coded so
+  // the player can still tell which lanes each rod is meant to strike.
+  if (s.trail.length > 1) {
+    ctx.globalCompositeOperation = "screen";
+    ctx.beginPath();
+
+    for (let i = 0; i < s.trail.length; i++) {
+      if (i === 0) ctx.moveTo(s.trail[i].tx, s.trail[i].ty);
+      else ctx.lineTo(s.trail[i].tx, s.trail[i].ty);
+    }
+    for (let i = s.trail.length - 1; i >= 0; i--) {
+      const t = i / (s.trail.length - 1);
+      const taperBaseX = s.trail[i].tx + (s.trail[i].x - s.trail[i].tx) * (0.2 + 0.8 * t);
+      const taperBaseY = s.trail[i].ty + (s.trail[i].y - s.trail[i].ty) * (0.2 + 0.8 * t);
+      ctx.lineTo(taperBaseX, taperBaseY);
+    }
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(s.x, s.y, s.trail[0].x, s.trail[0].y);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, "transparent");
+
+    ctx.fillStyle = grad;
+    ctx.globalAlpha = 0.5;
+    ctx.shadowBlur = 20 * dep;
+    ctx.shadowColor = color;
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+
+  // Rod body — a plain white rectangular prism, drawn as a straight
+  // (untapered) quad so the flat sides of the cross section read correctly.
+  const quad = (a, b) => {
+    ctx.beginPath();
+    ctx.moveTo(s.x + nx * a,  s.y + ny * a);
+    ctx.lineTo(s.tx + nx * b, s.ty + ny * b);
+    ctx.lineTo(s.tx - nx * b, s.ty - ny * b);
+    ctx.lineTo(s.x - nx * a,  s.y - ny * a);
+    ctx.closePath();
+  };
+
+  ctx.shadowBlur = 12 * dep; ctx.shadowColor = "rgba(255,255,255,0.5)";
+  ctx.fillStyle = "#f8fafc";
+  quad(wRod, wRod); ctx.fill();
+
+  // Bevel shading along one long edge, so the rectangular cross section reads
+  // as a solid prism rather than a flat white bar — a lit face and a shaded
+  // face, the way a real square rod catches light unevenly.
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.moveTo(s.x + nx * wRod,  s.y + ny * wRod);
+  ctx.lineTo(s.tx + nx * wRod, s.ty + ny * wRod);
+  ctx.lineTo(s.tx,             s.ty);
+  ctx.lineTo(s.x,              s.y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(100,116,139,0.45)";
+  ctx.beginPath();
+  ctx.moveTo(s.x,              s.y);
+  ctx.lineTo(s.tx,              s.ty);
+  ctx.lineTo(s.tx - nx * wRod, s.ty - ny * wRod);
+  ctx.lineTo(s.x - nx * wRod,  s.y - ny * wRod);
+  ctx.closePath();
+  ctx.fill();
+
+  // Flat end cap — a rectangular rod ends square, not in a rounded point.
+  ctx.fillStyle = "#e2e8f0";
+  ctx.beginPath();
+  ctx.moveTo(s.tx + nx * wRod, s.ty + ny * wRod);
+  ctx.lineTo(s.tx - nx * wRod, s.ty - ny * wRod);
+  ctx.lineTo(s.tx - nx * wRod + ux * 3, s.ty - ny * wRod + uy * 3);
+  ctx.lineTo(s.tx + nx * wRod + ux * 3, s.ty + ny * wRod + uy * 3);
+  ctx.closePath();
+  ctx.fill();
+
+  // Grip below the palm — the part of the rod held in the hand — shaded
+  // darker than the shaft so it reads as a handhold rather than more blade.
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 12 * dep;
+  ctx.lineCap = "butt";
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(s.x - ux * 26 * dep, s.y - uy * 26 * dep);
+  ctx.stroke();
+
+  // Contact point on the palm centre — the thing that actually registers
+  // hits. It swells and turns the lane colour the moment a block is in
+  // reach, so "where would my rod strike" is answered before you commit to
+  // the swing.
+  const on = s.onTarget;
+  const rr = (on ? 22 : 14) * dep;
+  ctx.shadowBlur = on ? 30 : 16; ctx.shadowColor = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = on ? 5 : 3;
+  ctx.beginPath(); ctx.arc(s.x, s.y, rr, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(s.x, s.y, 6 * dep, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawEffects() {
+  // Slash streak — a bright stroke along the line the saber travelled.
+  for (let i = slashes.length - 1; i >= 0; i--) {
+    const s = slashes[i];
+    s.life--;
+    const a = s.life / s.max;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 5 * a;
+    ctx.lineCap = "round";
+    ctx.shadowBlur = 24; ctx.shadowColor = s.color;
+    ctx.beginPath();
+    ctx.moveTo(s.x - s.ux * s.len / 2, s.y - s.uy * s.len / 2);
+    ctx.lineTo(s.x + s.ux * s.len / 2, s.y + s.uy * s.len / 2);
+    ctx.stroke();
+    ctx.restore();
+    if (s.life <= 0) slashes.splice(i, 1);
+  }
+
+  // Block halves tumbling away from the cut.
+  for (let i = shards.length - 1; i >= 0; i--) {
+    const h = shards[i];
+    h.x += h.vx; h.y += h.vy;
+    h.vy += 0.42; h.vx *= 0.985; h.vy *= 0.985;
+    h.rot += h.spin;
+    h.life--;
+    const a = Math.max(0, h.life / h.max);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rot);
+    ctx.fillStyle = h.color;
+    ctx.shadowBlur = 16; ctx.shadowColor = h.color;
+    // Half a block, split along the cut line.
+    ctx.fillRect(-h.size / 2, h.half > 0 ? -h.size / 2 : 0, h.size, h.size / 2);
+    ctx.restore();
+    if (h.life <= 0) shards.splice(i, 1);
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.35; p.vx *= 0.96; p.vy *= 0.96;
+    p.life--;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color; ctx.shadowBlur = 12; ctx.shadowColor = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+    ctx.restore();
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const t = popups[i];
+    t.y -= 1.4; t.life--;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, t.life / 45);
+    ctx.fillStyle = t.color;
+    ctx.font = "bold 26px Courier New";
+    ctx.textAlign = "center";
+    ctx.shadowBlur = 14; ctx.shadowColor = t.color;
+    ctx.fillText(t.text, t.x, t.y);
+    ctx.restore();
+    if (t.life <= 0) popups.splice(i, 1);
+  }
+
+  if (flash && flash.life > 0) {
+    ctx.save();
+    ctx.globalAlpha = (flash.life / flash.max) * 0.5;
+    ctx.fillStyle = flash.color;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    flash.life--;
+  }
+}
+
+function drawCountdown() {
+  const left = Math.max(0, countdownEnd - performance.now());
+  const n = Math.ceil(left / 1000);
+  ctx.save();
+  ctx.fillStyle = "rgba(2,6,23,0.55)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.shadowBlur = 40; ctx.shadowColor = "#22d3ee";
+  ctx.fillStyle = "#e2e8f0";
+  if (n > 0) {
+    ctx.font = "bold 150px Courier New";
+    ctx.fillText(String(n), W / 2, H / 2);
+    ctx.font = "20px Courier New";
+    ctx.fillText("RAISE BOTH HANDS", W / 2, H / 2 + 110);
+  }
+  ctx.restore();
+  if (left <= 0) beginTrack();
+}
+
+// Practice runs should be obvious at a glance — at a stall the operator needs
+// to know a score on screen was not set under the normal fail limits.
+function drawModeBadge() {
+  if (settings.mode !== "practice") return;
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.font = "bold 15px Courier New";
+  const label = "PRACTICE — NO FAIL";
+  const w = ctx.measureText(label).width;
+  ctx.fillStyle = "rgba(15,23,42,0.75)";
+  roundRectPath(ctx, 14, 14, w + 22, 30, 6);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(34,197,94,0.55)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = "#22c55e";
+  ctx.fillText(label, 25, 34);
+  ctx.restore();
+}
+
+// A quiet 15s intro is a long time to stand still at a stall, so show the
+// player exactly when the first block is coming.
+function drawIntroTimer(now) {
+  const first = pending.length ? pending[0].time : null;
+  if (first === null || first - now > 12 || first - now < 0) return;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#facc15";
+  ctx.font = "bold 30px Courier New";
+  ctx.shadowBlur = 18; ctx.shadowColor = "#facc15";
+  ctx.fillText("FIRST BLOCK IN " + Math.ceil(first - now), W / 2, 120);
+  ctx.restore();
+}
+
+/* ==========================================================================
+   8. HAND INPUT
+   ========================================================================== */
+
+// Apparent hand size in normalised units — a proxy for distance to the camera.
+function handSpan(lm) {
+  let max = 0;
+  for (const i of [4, 8, 12, 16, 20]) {
+    max = Math.max(max, Math.hypot(lm[i].x - lm[0].x, lm[i].y - lm[0].y));
+  }
+  return max;
+}
+
+function hexToRgb(hex) {
+  hex = hex.replace(/^#/, '');
+  const bigint = parseInt(hex, 16);
+  return {
+    r: (bigint >> 16) & 255,
+    g: (bigint >> 8) & 255,
+    b: bigint & 255
+  };
+}
+
+function wristColorDistance(lm) {
+  const x = Math.min(W - 1, Math.max(0, Math.round((1 - lm[0].x) * W)));
+  const y = Math.min(H - 1, Math.max(0, Math.round(lm[0].y * H)));
+  // Average a small patch — a single pixel is far too noisy on a webcam.
+  const s = 6;
+  const px = rawCtx.getImageData(
+    Math.max(0, x - s), Math.max(0, y - s),
+    Math.min(s * 2, W - Math.max(0, x - s)), Math.min(s * 2, H - Math.max(0, y - s))
+  ).data;
+  
+  let sumR = 0, sumG = 0, sumB = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    sumR += px[i];
+    sumG += px[i + 1];
+    sumB += px[i + 2];
+  }
+  const count = px.length / 4;
+  const avgR = sumR / count;
+  const avgG = sumG / count;
+  const avgB = sumB / count;
+  
+  const target = hexToRgb(settings.gloveColor || "#000000");
+  
+  return Math.sqrt(
+    Math.pow(avgR - target.r, 2) +
+    Math.pow(avgG - target.g, 2) +
+    Math.pow(avgB - target.b, 2)
+  );
+}
+
+function filterHands(list) {
+  if (settings.filter === "off") return list.slice(0, 2);
+
+  if (settings.filter === "glove") {
+    const kept = [];
+    for (const h of list) {
+      const dist = wristColorDistance(h.lm);
+      h.brightness = dist;
+      lastBrightness = dist;
+      if (dist <= settings.gloveTolerance) kept.push(h);
+    }
+    return kept.slice(0, 2);
+  }
+
+  // "closest": the player is nearest the camera, so their hands are largest.
+  return list.slice().sort((a, b) => b.span - a.span).slice(0, 2);
+}
+
+// Assign sabers by on-screen position, not by MediaPipe's handedness label.
+// The label assumes a mirrored input image and flips depending on how the feed
+// is fed in; screen position is what the player actually sees and reasons about.
+//
+// Assignment is sticky: each hand goes to whichever saber it was nearest to
+// last frame. Re-sorting purely by x every frame made the sabers swap colour
+// whenever the player crossed their arms, or jitter between hands when the two
+// were at a similar x.
+function assignSabers(kept, now, dt) {
+  const seen = { left: false, right: false };
+
+  if (kept.length >= 2) {
+    const a = kept[0], b = kept[1];
+    let toLeft = a, toRight = b;
+
+    const bothLive = sabers.left.active && sabers.right.active;
+    if (bothLive) {
+      const keep = dist2(a, sabers.left) + dist2(b, sabers.right);
+      const swap = dist2(b, sabers.left) + dist2(a, sabers.right);
+      if (swap < keep) { toLeft = b; toRight = a; }
+    } else if (a.x > b.x) {
+      toLeft = b; toRight = a;
+    }
+
+    update(sabers.left, toLeft, now, dt);   seen.left = true;
+    update(sabers.right, toRight, now, dt); seen.right = true;
+
+  } else if (kept.length === 1) {
+    // One hand: go by which half of the screen it is on, with a dead band in
+    // the middle so jitter on the centre line cannot flip the saber back and
+    // forth. Pure stickiness was wrong here -- a one-handed player reaching
+    // across would find their saber left behind on the far side.
+    const h = kept[0];
+    const M = 60;
+    let side;
+    if (h.x < W / 2 - M) {
+      side = "left";
+    } else if (h.x > W / 2 + M) {
+      side = "right";
+    } else if (sabers.left.active && sabers.right.active) {
+      side = dist2(h, sabers.left) <= dist2(h, sabers.right) ? "left" : "right";
+    } else if (sabers.left.active) {
+      side = "left";
+    } else if (sabers.right.active) {
+      side = "right";
+    } else {
+      side = h.x < W / 2 ? "left" : "right";
+    }
+    update(sabers[side], h, now, dt);
+    seen[side] = true;
+  }
+
+  // Tracking blinks for a frame or two constantly. Dropping the saber the
+  // instant a frame misses made hits vanish mid-swing, so hold it briefly.
+  for (const k of ["left", "right"]) {
+    const s = sabers[k];
+    if (!seen[k] && s.active && now - s.seen > 180) {
+      s.active = false;
+      s.speed = s.vx = s.vy = 0;
+      s.trail.length = 0;
+    }
+  }
+}
+
+function dist2(h, s) {
+  const dx = h.x - s.x, dy = h.y - s.y;
+  return dx * dx + dy * dy;
+}
+
+function update(s, h, now, dt) {
+  if (!s.active || now - s.seen > 180) {
+    // Fresh acquisition: snap to the sample and start from rest, otherwise the
+    // jump from the stale position registers as one enormous phantom swing.
+    s.x = h.x; s.y = h.y;
+    s.px = h.x; s.py = h.y;
+    s.tx = h.tx; s.ty = h.ty;
+    s.ptx = h.tx; s.pty = h.ty;
+    s.vx = s.vy = 0; s.speed = 0;
+    s.trail.length = 0;
+  } else if (Math.hypot(h.x - s.x, h.y - s.y) / dt > settings.maxHandSpeed) {
+    // The hand appears to have teleported. Real arms do not move this fast, so
+    // this is a tracking discontinuity: the detector swapped which hand is
+    // which, or a hand left and re-entered frame somewhere else. Treated as a
+    // swing it would be an enormous phantom slash that hits whatever happens to
+    // be in the strike zone. Snap across and start again from rest instead.
+    s.x = h.x; s.y = h.y;
+    s.px = h.x; s.py = h.y;
+    s.tx = h.tx; s.ty = h.ty;
+    s.ptx = h.tx; s.pty = h.ty;
+    s.vx = s.vy = 0; s.speed = 0;
+    s.trail.length = 0;
+  } else {
+    s.px = s.x; s.py = s.y;
+    s.ptx = s.tx; s.pty = s.ty;
+
+    const dx = h.x - s.px;
+    const dy = h.y - s.py;
+    const v = Math.hypot(dx, dy);
+    
+    // Scale alpha dynamically
+    // Snappy and natural tracking with baseline smoothing
+    const alpha = Math.min(0.95, 0.4 + (v * 0.02));
+    
+    s.x = (alpha * h.x) + ((1 - alpha) * s.px);
+    s.y = (alpha * h.y) + ((1 - alpha) * s.py);
+
+    // The tip is smoothed alongside the contact point
+    s.tx = (alpha * h.tx) + ((1 - alpha) * s.ptx);
+    s.ty = (alpha * h.ty) + ((1 - alpha) * s.pty);
+
+    // Divide by the time since this saber was last actually sampled, not by
+    // the frame delta. If tracking dropped it for a few frames, the hand
+    // covered that distance over the whole gap — charging it to a single
+    // frame would invent a swing several times faster than the real one.
+    const gap = Math.max(dt, (now - s.seen) / 1000);
+    const inst = { x: (s.x - s.px) / gap, y: (s.y - s.py) / gap };
+    // Light velocity smoothing keeps a single noisy frame from either faking
+    // a hit or swallowing a real one.
+    s.vx += (inst.x - s.vx) * 0.55;
+    s.vy += (inst.y - s.vy) * 0.55;
+    s.speed = Math.hypot(s.vx, s.vy);
+  }
+
+  s.span += (h.span - s.span) * 0.25;   // smoothed; drives the depth cue
+
+  s.active = true;
+  s.seen = now;
+  s.trail.push({ x: s.x, y: s.y, tx: s.tx, ty: s.ty });
+  if (s.trail.length > 5) s.trail.shift();
+  peakSwing = Math.max(peakSwing, s.speed);
+}
+
+/* ==========================================================================
+   9. COLLISION / SCORING
+   ========================================================================== */
+
+// Shortest distance from a point to a line segment.
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// How close the saber came to a note during this frame.
+//
+// Testing only the tip's current position was the main source of "I definitely
+// hit that". A fast swing moves 100+ px between frames, so the tip is on one
+// side of the block on frame N and past it on frame N+1, never inside the hit
+// radius. This measures the swept path of the tip, and also the blade itself,
+// so contact anywhere along the saber counts.
+function saberDist(s, x, y) {
+  return Math.min(
+    pointSegDist(x, y, s.ptx, s.pty, s.tx, s.ty), // tip swept path
+    pointSegDist(x, y, s.x, s.y, s.tx, s.ty)      // current blade
+  );
+}
+
+// Distance to the hand alone, ignoring the blade.
+//
+// Bombs use this rather than saberDist. The blade is up to 190 px long, and
+// counting its full length against bombs makes them nearly unavoidable — you
+// can be retreating from a bomb and still clip it with a tip you are not really
+// steering. A player aims their hand, so a bomb should only punish the hand.
+function handDist(s, x, y) {
+  return pointSegDist(x, y, s.px, s.py, s.x, s.y);
+}
+
+function checkHits(key) {
+  const s = sabers[key];
+  if (!s.active) return;
+
+  for (let i = active.length - 1; i >= 0; i--) {
+    const n = active[i];
+    const pos = noteXYScale(n, n.progress);
+
+    if (n.type === "bomb") {
+      // Bombs punish contact at any speed, but only while they are visually in
+      // the strike zone, and only against the hand itself (see handDist).
+      if (n.progress < 0.88 || n.progress > 1.12) continue;
+      if (handDist(s, pos.x, pos.y) > BOMB_RADIUS) continue;
+      bombHits++;
+      combo = 0;
+      score = Math.max(0, score - 400);
+      burst(pos.x, pos.y, "#ef4444", 30);
+      popup(pos.x, pos.y - 40, "BOMB!", "#ef4444");
+      flash = { color: "#ef4444", life: 14, max: 14 };
+      active.splice(i, 1);
+      updateHUD();
+      if (checkFail()) return;
+      continue;
+    }
+
+    if (n.progress < HIT_MIN || n.progress > HIT_MAX) continue;
+    if (saberDist(s, pos.x, pos.y) > HIT_RADIUS) continue;
+    
+    // OVERLAP AUTO-SLASH: Removed s.speed < settings.minSwing requirement.
+    // If the saber simply overlaps the block, it slices instantly.
+
+    // Left saber owns the red lanes, right saber the cyan ones. Cutting a
+    // block with the wrong saber is a real mistake, not a non-event: it now
+    // destroys the block and counts against the run.
+    if ((n.lane < 2 ? "left" : "right") !== key) {
+      wrongHits++;
+      combo = 0;
+      score = Math.max(0, score - 200);
+      burst(pos.x, pos.y, "#f59e0b", 22);
+      popup(pos.x, pos.y - 40, "WRONG HAND", "#f59e0b");
+      flash = { color: "#f59e0b", life: 10, max: 10 };
+      active.splice(i, 1);
+      updateHUD();
+      if (checkFail()) return;
+      continue;
+    }
+
+    // OVERLAP AUTO-SLASH: Removed directionOK requirement.
+
+    // Timing bonus: closest to progress 1.0 scores best.
+    const off = Math.abs(n.progress - 1.0);
+    const perfect = off < 0.06;
+    combo++;
+    bestCombo = Math.max(bestCombo, combo);
+    hits++;
+    const mult = Math.min(8, 1 + Math.floor(combo / 5));
+    score += Math.round((perfect ? 150 : 100) * mult);
+
+    const color = n.lane < 2 ? COLOR_L : COLOR_R;
+    burst(pos.x, pos.y, color, perfect ? 30 : 20);
+    spawnSlice(pos.x, pos.y, NOTE_SIZE * pos.scale, color, s.vx, s.vy);
+    popup(pos.x, pos.y - 40, perfect ? "PERFECT " + mult + "x" : "+" + (100 * mult), color);
+    active.splice(i, 1);
+    updateHUD();
+  }
+}
+
+/* ==========================================================================
+   10. MAIN FRAME — driven by MediaPipe results
+   ========================================================================== */
+
+function onResults(res) {
+  // FPS.
+  const t = frameNow();
+  frameTimes.push(t);
+  while (frameTimes.length && frameTimes[0] < t - 1000) frameTimes.shift();
+  fpsValue = frameTimes.length;
+
+  // Mirror the camera so the player's movements match what they see.
+  // The raw buffer is mirrored too, so wrist sampling and drawing share
+  // one coordinate space.
+  rawCtx.save();
+  rawCtx.translate(W, 0); rawCtx.scale(-1, 1);
+  rawCtx.drawImage(res.image, 0, 0, W, H);
+  rawCtx.restore();
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = 0.45;
+  ctx.drawImage(raw, 0, 0, W, H);
+  ctx.restore();
+  ctx.fillStyle = "rgba(2,6,23,0.35)";
+  ctx.fillRect(0, 0, W, H);
+
+  // ---- hands ----
+  const dt = Math.min(0.1, Math.max(0.008, (t - lastFrame) / 1000)) ;
+  lastFrame = t;
+  peakSwing *= 0.94;
+
+  const list = [];
+  if (res.multiHandLandmarks) {
+    for (const lm of res.multiHandLandmarks) {
+      // Contact point is the PALM CENTRE — the average of the wrist and the
+      // four knuckles. Averaging five rigid landmarks cancels most of the
+      // per-landmark noise, and it is the point a player actually thinks of as
+      // "my hand", so what they aim with is what registers. The old contact
+      // point sat 2.3x beyond the wrist along the hand axis, which is why the
+      // saber never felt lined up: you were aiming with a spot in mid-air.
+      let px = 0, py = 0;
+      for (const i of [0, 5, 9, 13, 17]) {
+        px += (1 - lm[i].x) * W;
+        py += lm[i].y * H;
+      }
+      px /= 5; py /= 5;
+
+      // Blade points along the rigid wrist-to-middle-knuckle axis. Length
+      // tracks apparent hand size so it looks right at any distance.
+      const wx = (1 - lm[0].x) * W, wy = lm[0].y * H;
+      const kx = (1 - lm[9].x) * W, ky = lm[9].y * H;
+      let dx = kx - wx, dy = ky - wy;
+      const mag = Math.hypot(dx, dy) || 1;
+      dx /= mag; dy /= mag;
+      const span = handSpan(lm);
+      const blade = Math.max(70, Math.min(190, span * H * 1.5));
+
+      list.push({
+        lm, span,
+        x: px, y: py,                          // contact point
+        tx: px + dx * blade, ty: py + dy * blade,  // blade tip
+      });
+    }
+  }
+  const kept = filterHands(list);
+  assignSabers(kept, t, dt);
+
+  el("tracking").textContent = kept.length
+    ? kept.length + " HAND" + (kept.length > 1 ? "S" : "") + " LOCKED"
+    : "NO HANDS";
+  el("tracking").className = kept.length ? "live" : "lost";
+  el("fps").textContent = fpsValue + " FPS";
+
+  if (phase === "calib") {
+    el("calibRead").textContent = lastBrightness === null
+      ? "—" : lastBrightness.toFixed(0);
+    el("speedRead").textContent = peakSwing.toFixed(0);
+  }
+
+  // ---- world ----
+  if (phase === "playing" || phase === "countdown") {
+    drawHighway();
+  }
+
+  if (phase === "playing") {
+    const now = songTime();
+
+    // Spawn notes whose travel window has opened.
+    while (pending.length && now >= pending[0].time - PRE_SPAWN) {
+      active.push(pending.shift());
+    }
+
+    // Position is recomputed from audio time every frame, so a dropped frame
+    // never desyncs the map — the notes snap back to where the music says.
+    for (let i = active.length - 1; i >= 0; i--) {
+      const n = active[i];
+      n.progress = (now - (n.time - PRE_SPAWN)) / PRE_SPAWN;
+      if (n.progress > CULL) {
+        active.splice(i, 1);
+        if (n.type === "target") {
+          misses++; combo = 0; updateHUD();
+          if (checkFail()) return;
+        }
+      }
+    }
+
+    // Work out which blocks are live and which one each saber is lined up
+    // with, before drawing, so the block itself can show that state.
+    sabers.left.onTarget = sabers.right.onTarget = false;
+    for (const n of active) {
+      n.armed = n.type === "target" &&
+                n.progress >= HIT_MIN && n.progress <= HIT_MAX;
+      n.locked = false;
+      if (n.armed) {
+        const key = n.lane < 2 ? "left" : "right";
+        const s = sabers[key];
+        const pos = noteXYScale(n, n.progress);
+        if (s.active && saberDist(s, pos.x, pos.y) <= HIT_RADIUS) {
+          n.locked = true;
+          s.onTarget = true;
+        }
+      }
+    }
+
+    // Far notes first so near ones overlap correctly.
+    active.sort((a, b) => a.progress - b.progress);
+    for (const n of active) drawNote(n, n.progress);
+
+    checkHits("left");
+    checkHits("right");
+    drawIntroTimer(now);
+    drawModeBadge();
+  }
+
+  drawSaber(sabers.left,  COLOR_L);
+  drawSaber(sabers.right, COLOR_R);
+  drawEffects();
+
+  if (phase === "countdown") drawCountdown();
+
+  // Finish once the map is exhausted and the last note has cleared.
+  if (phase === "playing" && !pending.length && !active.length &&
+      songTime() > 1 && timeOverride === null) {
+    endTrack();
+  }
+  // Safety net: if the audio ends first, close the run out.
+  if (phase === "playing" && audio.ended) endTrack();
+}
+
+/* ==========================================================================
+   10b. DEBUG HOOK
+   Lets the song clock be pinned and state inspected, so hit detection can be
+   exercised without a camera. Also handy for tuning thresholds at the venue:
+   __debug.set({ minSwing: 8 }) from the console adjusts live.
+   ========================================================================== */
+window.__debug = {
+  set: o => Object.assign(settings, o),
+  get: () => Object.assign({}, settings),
+  setTime: t => { timeOverride = t; },
+  setNow: ms => { nowOverride = ms; },
+  releaseTime: () => { timeOverride = null; nowOverride = null; },
+  noteXYScale,
+  // fromTime drops everything before that point, so a section can be replayed
+  // without the earlier blocks spawning and instantly counting as misses.
+  startRun(fromTime) {
+    pending = beatmap.notes
+      .filter(n => fromTime == null || n.time >= fromTime)
+      .map(n => Object.assign({}, n));
+    totalTargets = pending.filter(n => n.type === "target").length;
+    active = []; particles = []; popups = []; shards = []; slashes = [];
+    score = combo = bestCombo = hits = misses = bombHits = wrongHits = 0;
+    sabers.left = newSaber(); sabers.right = newSaber();
+    lastFrame = frameNow();
+    phase = "playing";
+    updateHUD();
+    menu.classList.add("hidden");
+    results.classList.add("hidden");
+  },
+  read: () => ({ score, combo, bestCombo, hits, misses, bombHits, wrongHits,
+                 active: active.length, pending: pending.length, phase }),
+  sabers: () => sabers,
+};
+
+/* ==========================================================================
+   11. BOOT
+   ========================================================================== */
+
+const hands = new Hands({ locateFile: f => "lib/hands/" + f });
+hands.setOptions({
+  maxNumHands: 3,             // one spare so the crowd filter has something to cull
+  modelComplexity: 1,         // full model: noticeably steadier landmarks
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.5, // lower than detection, so a lock is not dropped early
+  // No selfieMode here on purpose: we mirror the frame ourselves and read
+  // landmarks as (1 - x), so letting MediaPipe flip too would cancel out.
+});
+hands.onResults(onResults);
+
+async function boot() {
+  try {
+    await loadBeatmap();
+  } catch (e) {
+    el("menuErr").innerHTML = e.message +
+      "<br>Serve the folder over http://localhost — opening index.html directly will not work.";
+    return;
+  }
+
+  try {
+    const cam = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 960, height: 640,
+    });
+    await cam.start();
+    phase = "menu";
+    el("btnStart").disabled = false;
+  } catch (e) {
+    el("btnStart").textContent = "CAMERA UNAVAILABLE";
+    el("menuErr").innerHTML = "Camera error: " + e.message +
+      "<br>Allow camera access, and make sure the page is on http://localhost (not file://).";
+  }
+}
+
+boot();
+</script>
+</body>
+</html>

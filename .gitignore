@@ -1,0 +1,13 @@
+# Python build artefacts from tools/analyze_beats.py
+__pycache__/
+*.pyc
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Never commit credentials
+.env
+.env.*
+*.token

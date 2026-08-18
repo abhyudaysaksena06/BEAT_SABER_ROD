@@ -36,7 +36,7 @@
 
   #hud {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     padding: 10px 18px;
     background: linear-gradient(180deg, #0f172a, #0b1222);
@@ -174,7 +174,6 @@
     <div class="stat"><div class="k">ACCURACY</div><div class="v" id="uiAcc" style="color:var(--cyan)">100%</div></div>
     <div class="stat"><div class="k">MISSES</div><div class="v" id="uiMiss" style="color:var(--red)">0/5</div></div>
     <div class="stat"><div class="k">BOMBS</div><div class="v" id="uiBomb" style="color:var(--red)">0/3</div></div>
-    <div class="stat"><div class="k">BAD CUT</div><div class="v" id="uiWrong" style="color:var(--red)">0/3</div></div>
   </div>
 
   <div id="stage">
@@ -193,7 +192,7 @@
           <button data-v="arcade">ARCADE</button>
         </div>
         <div class="hint" style="margin-top:8px" id="diffHint">
-          Casual — slash any direction, just hit with the rod on the matching side.
+          Casual — slash any direction to cut the block.
         </div>
       </div>
 
@@ -204,19 +203,22 @@
           <button data-v="practice">PRACTICE</button>
         </div>
         <div class="hint" style="margin-top:8px" id="modeHint">
-          Normal — the run ends after 5 misses, 3 bombs or 3 wrong-hand cuts.
+          Normal — the run ends after 5 misses or 3 bombs.
         </div>
       </div>
 
       <div class="card">
         <div class="lbl">CROWD FILTER</div>
         <div class="seg" id="segFilter">
-          <button data-v="closest" class="on">CLOSEST HANDS</button>
-          <button data-v="glove">BLACK GLOVES</button>
+          <button data-v="closest" class="on">CLOSEST HAND</button>
+          <button data-v="glove">BLACK GLOVE</button>
           <button data-v="off">OFF</button>
         </div>
         <div class="hint" style="margin-top:8px" id="filterHint">
-          Keeps only the two largest hands — the player stands nearest the camera, so background spectators are ignored. No props needed.
+          Single-hand play: only one rod-carrying hand ever controls the
+          saber — a bare hand with no rod is ignored outright, and if more
+          than one rod-carrying hand is in frame, the one nearest the camera
+          wins. No further setup needed for a lone player.
         </div>
       </div>
 
@@ -255,7 +257,7 @@
           <input type="range" id="glove-tolerance" min="10" max="200" value="75" style="margin-top: 8px; width: 240px; accent-color: var(--cyan);">
         </label>
         <div class="hint" style="margin-top:10px">
-          Hold your hands up. Live wrist color distance:
+          Hold your hand up. Live wrist color distance:
           <b id="calibRead" style="color:var(--cyan)">—</b><br>
           Set target color to match the glove under current lighting, and set tolerance above the live distance reading.
         </div>
@@ -328,7 +330,6 @@
         <tr><td>NOTES HIT</td><td id="resHit">0</td></tr>
         <tr><td>BEST COMBO</td><td id="resCombo">0</td></tr>
         <tr><td>BOMBS HIT</td><td id="resBomb">0</td></tr>
-        <tr><td>WRONG-HAND CUTS</td><td id="resWrong">0</td></tr>
       </table>
       <button class="btn" id="btnAgain">PLAY AGAIN</button>
     </div>
@@ -336,7 +337,7 @@
 
   <div id="statusbar">
     <div>LEAD SOCIETY TECH OPS · ABHYUDAY SAKSENA · 1025030923 · COE</div>
-    <div><span id="tracking">NO HANDS</span> · <span id="fps">-- FPS</span></div>
+    <div><span id="tracking">NO ROD</span> · <span id="fps">-- FPS</span></div>
   </div>
 </div>
 
@@ -366,7 +367,6 @@ const BOMB_RADIUS = 54;
 // at the stall without editing code (__debug.set({ maxMisses: 10 })).
 const MAX_MISSES = 5;
 const MAX_BOMBS  = 3;
-const MAX_WRONG  = 3;
 
 // The play field sits in the middle band of the frame, NOT the lower half.
 // Blocks used to travel down and off the bottom edge, which forced the player
@@ -387,8 +387,12 @@ const Z_NEAR = 1.0;
 const NOTE_SIZE = 92;      // px at the strike point
 const RING_FROM = 0.35;    // travel progress at which the approach ring appears
 
-const COLOR_L = "#ff2d6f";   // left hand / lanes 0-1
-const COLOR_R = "#22d3ee";   // right hand / lanes 2-3
+// Purely decorative note colours now — lanes 0-1 vs 2-3 used to mean
+// "left hand only" vs "right hand only". Single-hand play means the one rod
+// reaches every lane, so this is just visual variety, not a matching rule.
+const COLOR_L = "#ff2d6f";
+const COLOR_R = "#22d3ee";
+const ROD_ACCENT = "#e2e8f0"; // the single saber's own trail/contact-ring colour
 
 const settings = {
   difficulty: "casual",   // casual | arcade
@@ -406,7 +410,6 @@ const settings = {
   maxHandSpeed: 6500,
   maxMisses: MAX_MISSES,
   maxBombs: MAX_BOMBS,
-  maxWrong: MAX_WRONG,
 
   // ---- rod detection (see detectRod) ----
   // How permissive the white-rod colour threshold is. Higher tolerates a
@@ -453,7 +456,7 @@ let shards = [];       // block halves flying apart after a cut
 let slashes = [];      // streak drawn along the swing path
 
 let score = 0, combo = 0, bestCombo = 0;
-let hits = 0, misses = 0, bombHits = 0, wrongHits = 0, totalTargets = 0;
+let hits = 0, misses = 0, bombHits = 0, totalTargets = 0;
 let countdownEnd = 0;
 let flash = null;
 
@@ -490,7 +493,7 @@ function newSaber() {
     dispReady: false,
   };
 }
-const sabers = { left: newSaber(), right: newSaber() };
+const sabers = { rod: newSaber() }; // single-player, single-hand
 
 let lastFrame = 0;       // timestamp of previous render tick, for real dt
 let lastHandFrame = 0;   // timestamp of previous MediaPipe callback, for hand dt
@@ -532,22 +535,22 @@ function segment(containerId, key, onChange) {
 
 segment("segDiff", "difficulty", v => {
   el("diffHint").textContent = v === "casual"
-    ? "Casual — slash any direction, just hit with the rod on the matching side."
+    ? "Casual — slash any direction to cut the block."
     : "Arcade — the slash must follow the arrow on the block, like real Beat Saber.";
 });
 
 segment("segMode", "mode", v => {
   el("modeHint").textContent = v === "normal"
-    ? "Normal — the run ends after 5 misses, 3 bombs or 3 wrong-hand cuts."
+    ? "Normal — the run ends after 5 misses or 3 bombs."
     : "Practice — nothing ends the run. Misses and bombs still cost score and "
       + "break the combo, but you always play the track to the end.";
 });
 
 segment("segFilter", "filter", v => {
   el("filterHint").textContent = {
-    closest: "Keeps only the two largest hands — the player stands nearest the camera, so background spectators are ignored. No props needed.",
-    glove:   "Player wears black gloves; any hand whose wrist pixel is not dark is culled. Tune the threshold under CALIBRATE for the stall's lighting.",
-    off:     "No filtering — every detected hand controls a saber. Fine for testing at a desk, risky in a crowd.",
+    closest: "Single-hand play: the rod-carrying hand nearest the camera controls the saber. A bare hand with no rod is ignored outright, and so is anyone further from the camera.",
+    glove:   "Player wears a black glove; the tracked hand is ignored unless its wrist pixel is dark AND it's carrying the rod. Tune the threshold under CALIBRATE for the stall's lighting.",
+    off:     "No hand filtering — but a rod is still required. The nearest rod-carrying hand controls the saber. Fine for testing at a desk, risky in a crowd.",
   }[v];
 });
 
@@ -615,9 +618,9 @@ function startGame() {
   pending = beatmap.notes.map(n => Object.assign({}, n));
   totalTargets = pending.filter(n => n.type === "target").length;
   active = []; particles = []; popups = []; shards = []; slashes = [];
-  score = combo = bestCombo = hits = misses = bombHits = wrongHits = 0;
+  score = combo = bestCombo = hits = misses = bombHits = 0;
   flash = null;
-  sabers.left = newSaber(); sabers.right = newSaber();
+  sabers.rod = newSaber();
   updateHUD();
 
   menu.classList.add("hidden");
@@ -658,20 +661,19 @@ function endTrack(failReason) {
   el("resHit").textContent   = hits + " / " + totalTargets;
   el("resCombo").textContent = bestCombo + "x";
   el("resBomb").textContent  = bombHits;
-  el("resWrong").textContent = wrongHits;
   results.classList.remove("hidden");
   return true;
 }
 
-// Three ways to end a run early. Kept as one place so every penalty path
-// funnels through the same check.
+// Two ways to end a run early. Kept as one place so every penalty path
+// funnels through the same check. (A third — wrong-hand cuts — no longer
+// applies: single-hand play means there is no "wrong" hand to cut with.)
 function checkFail() {
   // Practice: penalties still cost score and break the combo, but nothing
   // ends the run — the player always gets to the end of the track.
   if (settings.mode === "practice") return false;
-  if (misses    >= settings.maxMisses) return endTrack(settings.maxMisses + " MISSED BLOCKS");
-  if (bombHits  >= settings.maxBombs)  return endTrack(settings.maxBombs + " BOMBS HIT");
-  if (wrongHits >= settings.maxWrong)  return endTrack(settings.maxWrong + " WRONG-HAND CUTS");
+  if (misses   >= settings.maxMisses) return endTrack(settings.maxMisses + " MISSED BLOCKS");
+  if (bombHits >= settings.maxBombs)  return endTrack(settings.maxBombs + " BOMBS HIT");
   return false;
 }
 
@@ -683,9 +685,8 @@ function updateHUD() {
   // In practice there is no limit to count toward, so show a plain tally
   // rather than "0/5", which would imply a cap that is not enforced.
   const practice = settings.mode === "practice";
-  el("uiMiss").textContent  = practice ? misses    : misses    + "/" + settings.maxMisses;
-  el("uiBomb").textContent  = practice ? bombHits  : bombHits  + "/" + settings.maxBombs;
-  el("uiWrong").textContent = practice ? wrongHits : wrongHits + "/" + settings.maxWrong;
+  el("uiMiss").textContent  = practice ? misses   : misses   + "/" + settings.maxMisses;
+  el("uiBomb").textContent  = practice ? bombHits : bombHits + "/" + settings.maxBombs;
 }
 
 /* ==========================================================================
@@ -1201,7 +1202,7 @@ function drawCountdown() {
     ctx.font = "bold 150px Courier New";
     ctx.fillText(String(n), W / 2, H / 2);
     ctx.font = "20px Courier New";
-    ctx.fillText("RAISE BOTH HANDS", W / 2, H / 2 + 110);
+    ctx.fillText("RAISE YOUR HAND WITH THE ROD", W / 2, H / 2 + 110);
   }
   ctx.restore();
   if (left <= 0) beginTrack();
@@ -1425,92 +1426,48 @@ function detectRod(cx, cy, expectedLen, tolerance, dbg) {
   return { grip, tip, length };
 }
 
+// Single-player, single-hand: exactly one physical rod controls the game.
+// A bare hand with no detected rod is filtered out here, before any of the
+// crowd-filter modes below even see it — this isn't just "don't let it
+// control a saber", it's "the tracker does not register it at all", so a
+// spectator's empty hand can never be mistaken for the player's.
 function filterHands(list) {
-  if (settings.filter === "off") return list.slice(0, 2);
+  const withRod = list.filter(h => h.rodDetected);
+
+  if (settings.filter === "off") return withRod.slice(0, 1);
 
   if (settings.filter === "glove") {
-    const kept = [];
-    for (const h of list) {
+    const matched = [];
+    for (const h of withRod) {
       const dist = wristColorDistance(h.lm);
       h.brightness = dist;
       lastBrightness = dist;
-      if (dist <= settings.gloveTolerance) kept.push(h);
+      if (dist <= settings.gloveTolerance) matched.push(h);
     }
-    return kept.slice(0, 2);
+    return matched.sort((a, b) => b.span - a.span).slice(0, 1);
   }
 
-  // "closest": the player is nearest the camera, so their hands are largest.
-  return list.slice().sort((a, b) => b.span - a.span).slice(0, 2);
+  // "closest": the player is nearest the camera, so their rod-carrying hand
+  // is the largest. If a second rod-carrying hand is genuinely in frame,
+  // this is also what keeps the game single-hand — only the nearer one
+  // ever gets tracked, never both at once.
+  return withRod.slice().sort((a, b) => b.span - a.span).slice(0, 1);
 }
 
-// Assign sabers by on-screen position, not by MediaPipe's handedness label.
-// The label assumes a mirrored input image and flips depending on how the feed
-// is fed in; screen position is what the player actually sees and reasons about.
-//
-// Assignment is sticky: each hand goes to whichever saber it was nearest to
-// last frame. Re-sorting purely by x every frame made the sabers swap colour
-// whenever the player crossed their arms, or jitter between hands when the two
-// were at a similar x.
+// Drive the single saber from whatever hand filterHands kept (at most one).
+// Tracking blinks for a frame or two constantly, so the saber isn't dropped
+// the instant a frame misses — hits would vanish mid-swing — it's held for
+// 180ms and only deactivated once that gap is exceeded.
 function assignSabers(kept, now, dt) {
-  const seen = { left: false, right: false };
-
-  if (kept.length >= 2) {
-    const a = kept[0], b = kept[1];
-    let toLeft = a, toRight = b;
-
-    const bothLive = sabers.left.active && sabers.right.active;
-    if (bothLive) {
-      const keep = dist2(a, sabers.left) + dist2(b, sabers.right);
-      const swap = dist2(b, sabers.left) + dist2(a, sabers.right);
-      if (swap < keep) { toLeft = b; toRight = a; }
-    } else if (a.x > b.x) {
-      toLeft = b; toRight = a;
-    }
-
-    update(sabers.left, toLeft, now, dt);   seen.left = true;
-    update(sabers.right, toRight, now, dt); seen.right = true;
-
-  } else if (kept.length === 1) {
-    // One hand: go by which half of the screen it is on, with a dead band in
-    // the middle so jitter on the centre line cannot flip the saber back and
-    // forth. Pure stickiness was wrong here -- a one-handed player reaching
-    // across would find their saber left behind on the far side.
-    const h = kept[0];
-    const M = 60;
-    let side;
-    if (h.x < W / 2 - M) {
-      side = "left";
-    } else if (h.x > W / 2 + M) {
-      side = "right";
-    } else if (sabers.left.active && sabers.right.active) {
-      side = dist2(h, sabers.left) <= dist2(h, sabers.right) ? "left" : "right";
-    } else if (sabers.left.active) {
-      side = "left";
-    } else if (sabers.right.active) {
-      side = "right";
-    } else {
-      side = h.x < W / 2 ? "left" : "right";
-    }
-    update(sabers[side], h, now, dt);
-    seen[side] = true;
+  const s = sabers.rod;
+  if (kept.length >= 1) {
+    update(s, kept[0], now, dt);
+  } else if (s.active && now - s.seen > 180) {
+    s.active = false;
+    s.speed = s.vx = s.vy = 0;
+    s.trail.length = 0;
+    s.dispReady = false;
   }
-
-  // Tracking blinks for a frame or two constantly. Dropping the saber the
-  // instant a frame misses made hits vanish mid-swing, so hold it briefly.
-  for (const k of ["left", "right"]) {
-    const s = sabers[k];
-    if (!seen[k] && s.active && now - s.seen > 180) {
-      s.active = false;
-      s.speed = s.vx = s.vy = 0;
-      s.trail.length = 0;
-      s.dispReady = false;
-    }
-  }
-}
-
-function dist2(h, s) {
-  const dx = h.x - s.x, dy = h.y - s.y;
-  return dx * dx + dy * dy;
 }
 
 function update(s, h, now, dt) {
@@ -1639,8 +1596,8 @@ function handDist(s, x, y) {
   return pointSegDist(x, y, s.dispPX, s.dispPY, s.dispX, s.dispY);
 }
 
-function checkHits(key) {
-  const s = sabers[key];
+function checkHits() {
+  const s = sabers.rod;
   if (!s.active) return;
 
   for (let i = active.length - 1; i >= 0; i--) {
@@ -1678,23 +1635,9 @@ function checkHits(key) {
                   s.foreshortenRate >= settings.minForeshortenRate;
     if (!swung) continue;
 
-    // Left saber owns the red lanes, right saber the cyan ones. Cutting a
-    // block with the wrong saber is a real mistake, not a non-event: it now
-    // destroys the block and counts against the run. Gated on the swing
-    // check above too — brushing the wrong-colour block without swinging at
-    // it shouldn't cost anything.
-    if ((n.lane < 2 ? "left" : "right") !== key) {
-      wrongHits++;
-      combo = 0;
-      score = Math.max(0, score - 200);
-      burst(pos.x, pos.y, "#f59e0b", 22);
-      popup(pos.x, pos.y - 40, "WRONG HAND", "#f59e0b");
-      flash = { color: "#f59e0b", life: 10, max: 10 };
-      active.splice(i, 1);
-      updateHUD();
-      if (checkFail()) return;
-      continue;
-    }
+    // Single-hand play: the one rod can cut a block in any lane — there is
+    // no second hand to "own" the other colour, so lane colour is purely
+    // decorative here, not a matching requirement.
 
     // Arcade only — directionOK is unconditionally true in Casual. A real
     // swing that crosses the block on the wrong axis is a failed cut, not a
@@ -1814,9 +1757,10 @@ function onResults(res) {
   const kept = filterHands(list);
   assignSabers(kept, t, dt);
 
-  el("tracking").textContent = kept.length
-    ? kept.length + " HAND" + (kept.length > 1 ? "S" : "") + " LOCKED"
-    : "NO HANDS";
+  // Reflects `kept`, not the raw hand list — a bare hand with no detected
+  // rod never counts as tracked, so this is honest about what's actually
+  // controlling the saber, not just what MediaPipe can see.
+  el("tracking").textContent = kept.length ? "ROD LOCKED" : "NO ROD";
   el("tracking").className = kept.length ? "live" : "lost";
 
   if (phase === "calib") {
@@ -1869,25 +1813,26 @@ function tick() {
 
   el("fps").textContent = fpsValue + " FPS · " + trackFpsValue + " TRACK";
 
-  // Extrapolate each rod a short distance beyond its last confirmed sample
+  // Extrapolate the rod a short distance beyond its last confirmed sample
   // using the measured velocity, capped so a stale reading cannot run away.
-  // This is what lets the rod glide smoothly at 60fps between hand samples
-  // that may only arrive 15-30 times a second, without inventing motion the
-  // hand did not make.
-  for (const key of ["left", "right"]) {
-    const s = sabers[key];
-    if (!s.active) continue;
-    const since = Math.min(0.08, Math.max(0, (t - s.seen) / 1000));
-    const nx = s.x + s.vx * since, ny = s.y + s.vy * since;
-    const ntx = s.tx + s.vx * since, nty = s.ty + s.vy * since;
-    if (!s.dispReady) {
-      s.dispPX = nx; s.dispPY = ny; s.dispPTX = ntx; s.dispPTY = nty;
-      s.dispReady = true;
-    } else {
-      s.dispPX = s.dispX; s.dispPY = s.dispY;
-      s.dispPTX = s.dispTX; s.dispPTY = s.dispTY;
+  // This is what lets it glide smoothly at 60fps between hand samples that
+  // may only arrive 15-30 times a second, without inventing motion the hand
+  // did not make.
+  {
+    const s = sabers.rod;
+    if (s.active) {
+      const since = Math.min(0.08, Math.max(0, (t - s.seen) / 1000));
+      const nx = s.x + s.vx * since, ny = s.y + s.vy * since;
+      const ntx = s.tx + s.vx * since, nty = s.ty + s.vy * since;
+      if (!s.dispReady) {
+        s.dispPX = nx; s.dispPY = ny; s.dispPTX = ntx; s.dispPTY = nty;
+        s.dispReady = true;
+      } else {
+        s.dispPX = s.dispX; s.dispPY = s.dispY;
+        s.dispPTX = s.dispTX; s.dispPTY = s.dispTY;
+      }
+      s.dispX = nx; s.dispY = ny; s.dispTX = ntx; s.dispTY = nty;
     }
-    s.dispX = nx; s.dispY = ny; s.dispTX = ntx; s.dispTY = nty;
   }
 
   // ---- world ----
@@ -1921,16 +1866,16 @@ function tick() {
       }
     }
 
-    // Work out which blocks are live and which one each rod is lined up
-    // with, before drawing, so the block itself can show that state.
-    sabers.left.onTarget = sabers.right.onTarget = false;
+    // Work out which blocks are live and whether the rod is lined up with
+    // one, before drawing, so the block itself can show that state. Any
+    // lane counts — single-hand play means one rod reaches every block.
+    const s = sabers.rod;
+    s.onTarget = false;
     for (const n of active) {
       n.armed = n.type === "target" &&
                 n.progress >= HIT_MIN && n.progress <= HIT_MAX;
       n.locked = false;
       if (n.armed) {
-        const key = n.lane < 2 ? "left" : "right";
-        const s = sabers[key];
         const pos = noteXYScale(n, n.progress);
         if (s.active && saberDist(s, pos.x, pos.y) <= HIT_RADIUS) {
           n.locked = true;
@@ -1943,14 +1888,12 @@ function tick() {
     active.sort((a, b) => a.progress - b.progress);
     for (const n of active) drawNote(n, n.progress);
 
-    checkHits("left");
-    checkHits("right");
+    checkHits();
     drawIntroTimer(now);
     drawModeBadge();
   }
 
-  drawSaber(sabers.left,  COLOR_L);
-  drawSaber(sabers.right, COLOR_R);
+  drawSaber(sabers.rod, ROD_ACCENT);
   drawEffects();
 
   if (phase === "countdown") drawCountdown();
@@ -1981,6 +1924,7 @@ window.__debug = {
   detectRod, // exposed for on-site tuning and testing without a live rod
   drawCalibOverlay,
   setCalibHands: hands => { calibHands = hands; },
+  filterHands, // exposed for testing the rod-required / single-hand filter
   rawCtx,    // the buffer detectRod reads from
   // fromTime drops everything before that point, so a section can be replayed
   // without the earlier blocks spawning and instantly counting as misses.
@@ -1990,8 +1934,8 @@ window.__debug = {
       .map(n => Object.assign({}, n));
     totalTargets = pending.filter(n => n.type === "target").length;
     active = []; particles = []; popups = []; shards = []; slashes = [];
-    score = combo = bestCombo = hits = misses = bombHits = wrongHits = 0;
-    sabers.left = newSaber(); sabers.right = newSaber();
+    score = combo = bestCombo = hits = misses = bombHits = 0;
+    sabers.rod = newSaber();
     lastFrame = frameNow();
     lastHandFrame = frameNow();
     phase = "playing";
@@ -1999,7 +1943,7 @@ window.__debug = {
     menu.classList.add("hidden");
     results.classList.add("hidden");
   },
-  read: () => ({ score, combo, bestCombo, hits, misses, bombHits, wrongHits,
+  read: () => ({ score, combo, bestCombo, hits, misses, bombHits,
                  active: active.length, pending: pending.length, phase }),
   sabers: () => sabers,
 };

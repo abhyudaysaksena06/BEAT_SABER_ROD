@@ -165,12 +165,11 @@ A run ends early on any of:
 
 - **5 missed blocks**
 - **3 bombs hit**
-- **3 wrong-hand cuts**
 
-Cutting a block with the wrong-colour saber used to be a non-event — the game
-simply ignored it. It is now a real mistake: the block is destroyed, the combo
-resets, and it counts against the run. All three counters are live in the HUD,
-and the results screen names which limit ended the run.
+(A third limit, 3 wrong-hand cuts, existed when this was two-saber play.
+Single-hand play removed the mechanic it counted — see Single-hand,
+rod-required tracking — so the limit went with it.) Both counters are live in
+the HUD, and the results screen names which limit ended the run.
 
 **Bombs only react to the hand, not the blade.** Once hitting three bombs ends a
 run, bombs have to be genuinely avoidable. Testing them against the full blade
@@ -258,15 +257,18 @@ saber the instant a frame misses made hits vanish mid-swing; it is now held for
 180 ms. Re-acquisition snaps to the new position and restarts from rest, so the
 jump from a stale position cannot fire as one enormous phantom swing.
 
-**Saber assignment.** By on-screen position, never by MediaPipe's handedness
-label — that label assumes a mirrored input and flips depending on how the feed
-is fed in. With two hands the assignment is sticky, so crossing your arms does
-not swap the saber colours. With one hand it follows you across the screen, with
-a 60 px dead band on the centre line so jitter cannot flip it.
+**Saber assignment** used to matter a lot more: two tracked hands meant
+deciding which physical hand controlled which coloured saber, by on-screen
+position rather than MediaPipe's handedness label (that label assumes a
+mirrored input and flips depending on how the feed is fed in), sticky so
+crossing your arms didn't swap saber colours. Single-hand play (see
+Single-hand, rod-required tracking) removed the need for any of that —
+`assignSabers` now just points the one saber at whatever hand `filterHands`
+kept, with the same 180ms drop-out tolerance as before.
 
 Also: the full landmark model (`modelComplexity: 1`) instead of the lite one,
-and `maxNumHands: 3` so the crowd filter has a spare to cull without paying for a
-fourth.
+and `maxNumHands: 3` so the crowd filter still has spares to pick the right
+hand from in a crowd, even though only one ever ends up controlling the game.
 
 ### Rendering is decoupled from tracking
 
@@ -348,6 +350,31 @@ even one with very little hand travel. This is optional: calibration is not
 required to play, and until it's done `foreshorten` stays pinned at 1 and
 only the hand-speed check is live.
 
+### Single-hand, rod-required tracking
+
+This was originally a two-saber game: two tracked hands, four lanes, left
+hand owned the red lanes and right hand owned the cyan ones, cutting a block
+with the wrong hand was a scored mistake ("WRONG-HAND CUTS"). All of that is
+gone. `sabers` now holds one entry (`rod`), `filterHands` keeps at most one
+hand, and `checkHits` no longer checks which hand cut which lane — the single
+rod reaches every lane. Lane colour is still there on the blocks, but it's
+decorative now, not a matching rule. The wrong-hand penalty, its HUD tile
+("BAD CUT"), its results-screen row, and its fail-limit (`maxWrong`) are
+removed entirely rather than left dead, the way `settings.minSwing` was
+briefly left dead earlier (see Cut feedback below) — there's no reason to
+carry UI for a mechanic that can't fire.
+
+The bigger change is *what counts as "a hand" at all*. `filterHands` used to
+accept any detected hand, hand-skeleton-only sabers included; now it filters
+to `h.rodDetected` **before** any crowd-filter mode runs. A bare hand with no
+physical rod in it is not merely unfiltered — it's invisible to the tracker,
+the same as if MediaPipe hadn't found it. This is enforced at the same layer
+regardless of which crowd-filter mode is selected (closest / glove / off),
+so a spectator's empty hand can never be picked up as the player's, no
+matter how the filter is configured. When more than one rod-carrying hand is
+genuinely in frame, the nearest one (largest `span`) wins — single-hand, not
+first-detected.
+
 ### Cut feedback
 
 A hit no longer just deletes the block. It **splits along the cut line** — the
@@ -378,16 +405,20 @@ a straight swing draws a straight one.
 
 ### Crowd filter
 
-Three modes, since the stall is the hard case:
+Three modes, since the stall is the hard case. All three now operate on
+rod-carrying hands only (see Single-hand tracking above) and all three
+return at most one:
 
-- **Closest hands** (default) — keeps the two largest hands. The player stands
-  nearest the camera so their hands are biggest. Needs no props.
-- **Black gloves** — samples the wrist pixel and culls anything not dark. This
-  samples a **separate raw video buffer**, not the visible canvas; by the time
-  the check runs the visible canvas already has the dimmed overlay, highway
+- **Closest hand** (default) — keeps the single largest rod-carrying hand.
+  The player stands nearest the camera so their hand is biggest.
+- **Black glove** — samples the wrist pixel, keeps only rod-carrying hands
+  whose wrist is dark, and picks the largest of those. This samples a
+  **separate raw video buffer**, not the visible canvas; by the time the
+  check runs the visible canvas already has the dimmed overlay, highway
   lines and glowing blocks painted over the video, which would corrupt every
   reading. It averages a patch rather than one pixel, too.
-- **Off** — for testing at a desk.
+- **Off** — no hand filtering, but the rod requirement still applies. Fine
+  for testing at a desk, risky in a crowd.
 
 ---
 
@@ -437,6 +468,12 @@ samples.
 Hit detection was exercised without a camera by driving the frame callback with
 synthetic landmarks on a pinnable clock, which is how the frame-rate bug was
 caught in the first place.
+
+*(The table below predates single-hand, rod-required tracking — it was
+recorded against the original two-saber design. Rows about wrong-colour
+sabers and the wrong-hand limit describe a mechanic that no longer exists;
+kept as-is for an honest record of what was actually tested at the time,
+rather than rewritten to look like it always matched the current build.)*
 
 The simulated player keeps both hands visible and moves them continuously, as a
 real one does.

@@ -76,6 +76,31 @@
   }
   .overlay.hidden { display: none; }
 
+  /* CALIBRATE needs the live camera visible, unobstructed, with room to see
+     the sensing-area highlight drawn on it — that's the whole point of this
+     screen. A centered flex column of cards used to sit right on top of
+     where a raised hand actually is, hiding both the camera and the
+     highlight it was supposed to show off. Controls now live in a side
+     panel instead, leaving the rest of the frame clear. */
+  #calib {
+    background: transparent;
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: flex-end;
+    padding: 0;
+  }
+  #calib .calibPanel {
+    width: 380px;
+    max-width: 92vw;
+    height: 100%;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 18px 16px;
+    background: rgba(2, 6, 23, 0.82);
+    border-left: 2px solid var(--edge);
+  }
+  #calib .card { background: rgba(10, 15, 30, 0.9); margin: 8px auto; }
+
   h1 {
     margin: 0 0 6px;
     font-size: 40px;
@@ -202,9 +227,22 @@
       <div class="hint warn" id="menuErr" style="margin-top:10px"></div>
     </div>
 
-    <!-- ===== CALIBRATION ===== -->
+    <!-- ===== CALIBRATION =====
+         Laid out as a side panel, not a centered column — the whole point
+         of this screen is seeing the camera and the live sensing-area
+         highlight (drawn on canvas by drawCalibOverlay), and a centered
+         panel used to sit directly on top of where a raised hand actually
+         is, hiding it. -->
     <div class="overlay hidden" id="calib">
-      <h1 style="font-size:30px">CALIBRATION</h1>
+      <div class="calibPanel">
+      <h1 style="font-size:26px">CALIBRATION</h1>
+      <div class="hint">
+        The camera feed is live to the left. A
+        <b style="color:var(--gold)">gold box</b> marks the area being
+        scanned for the rod around each hand; it turns
+        <b style="color:var(--green)">green</b> when the rod is actually
+        found in it, and stays gold with a "NO ROD" label when it isn't.
+      </div>
       <div class="card">
         <div class="lbl">GLOVE CALIBRATION</div>
         <label style="display: block; margin-bottom: 10px; font-size: 15px; color: #e2e8f0;">
@@ -277,6 +315,7 @@
         </div>
       </div>
       <button class="btn" id="btnCalibDone">DONE</button>
+      </div>
     </div>
 
     <!-- ===== RESULTS ===== -->
@@ -458,6 +497,7 @@ let lastHandFrame = 0;   // timestamp of previous MediaPipe callback, for hand d
 
 let peakSwing = 0, lastBrightness = null;
 let lastRodSample = null; // { len, span } from the best-tracked hand this calib frame
+let calibHands = [];      // detectRod's search boxes this frame, for the CALIBRATE overlay
 let frameTimes = [], fpsValue = 0;           // render loop rate
 let trackFrameTimes = [], trackFpsValue = 0; // MediaPipe hand-detection rate
 let cameraReady = false;
@@ -1201,6 +1241,56 @@ function drawIntroTimer(now) {
   ctx.restore();
 }
 
+// CALIBRATE's "highlight the area you're sensing" — draws detectRod's actual
+// search box for each hand right on the live camera feed, gold while
+// searching, green with the detected rod's own line the moment it's found.
+// This is the same box detectRod itself used this frame (see the dbg
+// parameter), not a redrawn approximation, so what's on screen is literally
+// what got scanned.
+function drawCalibOverlay() {
+  if (!calibHands.length) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#facc15";
+    ctx.font = "bold 19px Courier New";
+    ctx.shadowBlur = 14; ctx.shadowColor = "#facc15";
+    ctx.fillText("RAISE YOUR HAND WITH THE ROD INTO VIEW", W * 0.3, H / 2);
+    ctx.restore();
+    return;
+  }
+  for (const h of calibHands) {
+    ctx.save();
+    ctx.strokeStyle = h.found ? "#22c55e" : "#facc15";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.shadowBlur = 10; ctx.shadowColor = ctx.strokeStyle;
+    ctx.strokeRect(h.bx, h.by, h.bw, h.bh);
+    ctx.setLineDash([]);
+
+    ctx.font = "bold 13px Courier New";
+    ctx.textAlign = "left";
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fillText(h.found ? "ROD " + h.length.toFixed(0) + "px" : "SENSING — NO ROD",
+                 h.bx + 6, h.by + 16);
+
+    if (h.found) {
+      ctx.shadowBlur = 14; ctx.shadowColor = "#fff";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(h.grip.x, h.grip.y);
+      ctx.lineTo(h.tip.x, h.tip.y);
+      ctx.stroke();
+      ctx.fillStyle = "#22c55e";
+      ctx.beginPath(); ctx.arc(h.tip.x, h.tip.y, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#94a3b8";
+      ctx.beginPath(); ctx.arc(h.grip.x, h.grip.y, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 /* ==========================================================================
    8. HAND INPUT
    ========================================================================== */
@@ -1264,12 +1354,17 @@ function wristColorDistance(lm) {
 // caveat as the black-glove filter above — it is a threshold, not real
 // object recognition, and can be thrown off by bright walls or clothing.
 // That's what the CALIBRATE screen's rod-tolerance slider is for.
-function detectRod(cx, cy, expectedLen, tolerance) {
+// dbg, if passed, gets filled in with the search box and outcome regardless
+// of whether a rod was actually found — CALIBRATE draws it directly on the
+// canvas so "the area you are sensing" is something the player can see, not
+// just a slider they have to trust.
+function detectRod(cx, cy, expectedLen, tolerance, dbg) {
   const half = Math.min(260, Math.max(90, expectedLen * 1.15));
   const bx = Math.max(0, Math.round(cx - half));
   const by = Math.max(0, Math.round(cy - half));
   const bw = Math.min(W - bx, Math.round(half * 2));
   const bh = Math.min(H - by, Math.round(half * 2));
+  if (dbg) { dbg.bx = bx; dbg.by = by; dbg.bw = bw; dbg.bh = bh; dbg.found = false; }
   if (bw < 10 || bh < 10) return null;
 
   const data = rawCtx.getImageData(bx, by, bw, bh).data;
@@ -1326,6 +1421,7 @@ function detectRod(cx, cy, expectedLen, tolerance) {
   const grip = d0 <= d1 ? e0 : e1;
   const tip  = d0 <= d1 ? e1 : e0;
 
+  if (dbg) { dbg.found = true; dbg.grip = grip; dbg.tip = tip; dbg.length = length; }
   return { grip, tip, length };
 }
 
@@ -1659,6 +1755,7 @@ function onResults(res) {
   lastHandFrame = t;
 
   const list = [];
+  const calibFrame = [];
   if (res.multiHandLandmarks) {
     for (const lm of res.multiHandLandmarks) {
       // Contact point is the PALM CENTRE — the average of the wrist and the
@@ -1689,8 +1786,12 @@ function onResults(res) {
 
       // Try to find the actual physical rod near this hand. On success its
       // real detected angle and length drive the saber — hold it upright,
-      // the saber is upright; tilt it, the saber tilts.
-      const rod = detectRod(px, py, fallbackLen, settings.rodTolerance);
+      // the saber is upright; tilt it, the saber tilts. dbg records the
+      // search box regardless of outcome, so CALIBRATE can draw exactly
+      // what area is being scanned even when nothing was found in it.
+      const dbg = {};
+      const rod = detectRod(px, py, fallbackLen, settings.rodTolerance, dbg);
+      calibFrame.push(dbg);
       let tx, ty, rodLen, rodDetected;
       if (rod) {
         tx = rod.tip.x; ty = rod.tip.y;
@@ -1709,6 +1810,7 @@ function onResults(res) {
       });
     }
   }
+  calibHands = calibFrame;
   const kept = filterHands(list);
   assignSabers(kept, t, dt);
 
@@ -1793,6 +1895,10 @@ function tick() {
     drawHighway();
   }
 
+  if (phase === "calib") {
+    drawCalibOverlay();
+  }
+
   if (phase === "playing") {
     const now = songTime();
 
@@ -1873,6 +1979,8 @@ window.__debug = {
   releaseTime: () => { timeOverride = null; nowOverride = null; },
   noteXYScale,
   detectRod, // exposed for on-site tuning and testing without a live rod
+  drawCalibOverlay,
+  setCalibHands: hands => { calibHands = hands; },
   rawCtx,    // the buffer detectRod reads from
   // fromTime drops everything before that point, so a section can be replayed
   // without the earlier blocks spawning and instantly counting as misses.

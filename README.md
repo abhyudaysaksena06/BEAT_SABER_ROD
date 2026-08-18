@@ -393,7 +393,19 @@ Three modes, since the stall is the hard case:
 
 ## Tuning at the venue
 
-**CALIBRATE** on the menu gives you three live readouts:
+**CALIBRATE now shows the live camera, not a blank panel.** It used to be a
+near-opaque overlay (`rgba(2,6,23,0.93)`) with all four cards centered in a
+column — which, once rod calibration was added, both hid the camera entirely
+and, on shorter viewports, pushed the DONE button below the visible area with
+nothing to scroll it into view. The screen is now a side panel (camera stays
+fully visible on the left, controls scroll independently on the right), and
+`drawCalibOverlay` draws detectRod's actual search box on that live feed —
+gold while it's scanning, green with the detected rod's own grip-to-tip line
+the moment it's found — so "the area being sensed" is something you can
+watch update in real time instead of a slider you have to trust blindly. A
+prompt tells you to raise your hand into view when nothing's tracked yet.
+
+CALIBRATE gives you these live readouts:
 
 - **Glove threshold** — with a live wrist-brightness number, so you can set it
   above your gloves and below the crowd under the actual stall lighting.

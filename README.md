@@ -299,6 +299,55 @@ rate (`60 FPS · 22 TRACK`), so a slow machine's real bottleneck — inference,
 not rendering — stays visible instead of being hidden behind one blended
 number.
 
+### Rod detection
+
+The saber's angle and length used to come entirely from hand-skeleton
+geometry — the wrist-to-middle-knuckle direction, scaled by apparent hand
+size. That's a reasonable stand-in for a bare hand, but it means the rendered
+saber never actually looked at the physical white rod players are holding: it
+just assumed a fixed grip angle relative to the palm.
+
+`detectRod` (index.html) looks at the rod directly. It's classical computer
+vision, not a trained model: a search box is thresholded around the tracked
+palm for bright, low-saturation pixels (a rod pixel is roughly white,
+regardless of exact shade), then the principal axis of that pixel cloud —
+via the eigenvector of its 2D covariance, i.e. PCA on the thresholded point
+set — gives the rod's actual long axis, and the extreme projections along
+that axis give its two ends. Whichever end sits nearer the tracked palm is
+the grip; the other is the tip. Hold the rod upright and the detected axis
+comes out vertical; tilt it and the axis tilts with it — the rendered saber
+follows the real rod's angle, not an assumed one.
+
+The grip point used for hit detection is still the smoothed palm centre
+(unchanged, and deliberately so — that anchor is well-tested and stable).
+Only the blade direction and length come from `detectRod` when it succeeds;
+if it can't find enough rod-coloured pixels this sample (occlusion, bad
+lighting, the rod outside the search box), the code falls back to the old
+hand-axis estimate for that frame rather than freezing or guessing wildly.
+
+Same caveat as the existing black-glove crowd filter: this is a colour/
+brightness threshold, not real object recognition, and can be thrown off by
+a bright wall or pale clothing behind the rod. CALIBRATE has a rod-detection
+tolerance slider for tuning it to the room.
+
+**Foreshortening as a second slash signal.** A rod rotating out of the image
+plane — the wrist snapping it around, the way an actual slash usually
+moves — visibly shortens in 2D even though its physical length hasn't
+changed. CALIBRATE's **rod calibration** step asks the player to hold the
+rod upright at normal playing distance and capture a reference: the ratio of
+detected pixel length to current hand span (`rodRefLenPerSpan`), which lets
+the game work out an *expected* length at any distance the hand happens to
+be tracked at. Comparing the live detected length against that expectation
+gives `foreshorten` (1 = full length visible, falling toward 0 as the rod
+turns edge-on) and, from its rate of change, `foreshortenRate`.
+
+A block now cuts if *either* the hand's translational speed clears
+`minSwing` (the original check) *or* `foreshortenRate` clears
+`minForeshortenRate` — a fast rotational flick counts as a slash on its own,
+even one with very little hand travel. This is optional: calibration is not
+required to play, and until it's done `foreshorten` stays pinned at 1 and
+only the hand-speed check is live.
+
 ### Cut feedback
 
 A hit no longer just deletes the block. It **splits along the cut line** — the
@@ -319,6 +368,13 @@ hit, rather than only checking direction when the auto-slash path made it
 irrelevant. Shard velocity, spin, slash length, and the particle burst all
 scale with how hard the swing actually was, so a bare-minimum-speed tap reads
 as a lighter cut than a full swing.
+
+**The slash streak traces the rod's actual path.** It used to draw a
+synthetic straight dash along the swing's velocity vector — a fixed shape
+regardless of how the swing was actually shaped. `spawnSlice` now takes the
+saber itself and builds the streak from its last few tracked tip positions
+plus where it is right now, so a swing that arced draws an arcing streak and
+a straight swing draws a straight one.
 
 ### Crowd filter
 

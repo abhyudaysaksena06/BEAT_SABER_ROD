@@ -223,12 +223,49 @@
         </div>
       </div>
       <div class="card">
+        <div class="lbl">ROD CALIBRATION</div>
+        <div class="hint">
+          Hold the rod upright at normal playing distance and arm's length, then
+          capture a reference. The game uses this to tell an actual rod-length
+          view apart from a foreshortened one when you slash.
+        </div>
+        <div class="hint" style="margin-top:8px">
+          Detected rod length: <b id="rodLenRead" style="color:var(--cyan)">—</b> px ·
+          length-to-hand-size ratio: <b id="rodRatioRead" style="color:var(--cyan)">—</b>
+        </div>
+        <button class="btn small" id="btnRodCapture" style="margin-top:8px">CAPTURE UPRIGHT REFERENCE</button>
+        <div class="hint" id="rodCalibStatus" style="margin-top:8px">
+          Not calibrated yet — slashes are detected by hand speed only.
+        </div>
+        <label style="display: block; margin-top: 14px; font-size: 15px; color: #e2e8f0;">
+          Rod detection tolerance: <span id="rod-tol-val">70</span>
+          <br>
+          <input type="range" id="rod-tolerance" min="20" max="150" step="5" value="70" style="margin-top: 8px; width: 240px; accent-color: var(--cyan);">
+        </label>
+        <div class="hint" style="margin-top:6px">
+          Higher = detects a dimmer/greyer rod, but risks picking up bright
+          background too. Lower if the rod outline looks like it is grabbing
+          walls or clothing.
+        </div>
+        <label style="display: block; margin-top: 14px; font-size: 15px; color: #e2e8f0;">
+          Foreshorten sensitivity: <span id="foreshorten-val">1.8</span>
+          <br>
+          <input type="range" id="foreshorten-sensitivity" min="0.5" max="4" step="0.1" value="1.8" style="margin-top: 8px; width: 240px; accent-color: var(--cyan);">
+        </label>
+        <div class="hint" style="margin-top:6px">
+          How fast the rod has to appear to shrink to count as a slash. Lower =
+          a gentler flick triggers it. Only active once calibrated above.
+        </div>
+      </div>
+      <div class="card">
         <div class="lbl">SWING SENSITIVITY — <span id="speedVal">450</span> px/sec</div>
         <input type="range" id="speedSlider" min="150" max="1500" step="25" value="450">
         <div class="hint" style="margin-top:10px">
           Lower = easier to register a slash. Live peak swing speed:
           <b id="speedRead" style="color:var(--cyan)">0</b><br>
-          Swing as you would in game and set this to about half your peak.
+          Swing as you would in game and set this to about half your peak. This
+          and the rod foreshorten check above both count as a valid slash —
+          whichever fires first.
         </div>
       </div>
       <div class="card">
@@ -331,6 +368,20 @@ const settings = {
   maxMisses: MAX_MISSES,
   maxBombs: MAX_BOMBS,
   maxWrong: MAX_WRONG,
+
+  // ---- rod detection (see detectRod) ----
+  // How permissive the white-rod colour threshold is. Higher tolerates a
+  // dimmer/greyer rod but risks picking up bright background.
+  rodTolerance: 70,
+  // length(px) / hand-span(normalised) measured with the rod held upright at
+  // arm's length, from CALIBRATE. null until the player captures it, in
+  // which case the foreshortening slash check is simply disabled and the
+  // game runs on hand speed alone — calibration is optional, not required.
+  rodRefLenPerSpan: null,
+  // How fast the rod's apparent length has to shrink (in length-ratio units
+  // per second) to count as a slash on its own, alongside — not instead of —
+  // the hand-speed check.
+  minForeshortenRate: 1.8,
 };
 
 /* ==========================================================================
@@ -380,6 +431,15 @@ function newSaber() {
     span: 0.2,           // apparent hand size — stands in for distance
     onTarget: false,     // lined up with a live block right now
     speed: 0, trail: [],
+    rodDetected: false,  // did detectRod() actually find the physical rod
+                         // this sample, or is tx/ty the hand-axis fallback
+    foreshorten: 1,      // detected rod length / expected length at this
+                         // distance — 1 = full length visible, falling
+                         // toward 0 as the rod rotates out of the image plane
+    foreshortenRate: 0,  // px... rather, ratio/second the length is
+                         // shrinking. A fast slash that rotates the rod
+                         // spikes this the same way a fast translation
+                         // spikes speed.
     // Display position: x/y/tx/ty extrapolated forward by vx/vy to the
     // current render tick (see tick()). Drawing and collision both read
     // this rather than x/y/tx/ty directly, so what's on screen is exactly
@@ -397,6 +457,7 @@ let lastFrame = 0;       // timestamp of previous render tick, for real dt
 let lastHandFrame = 0;   // timestamp of previous MediaPipe callback, for hand dt
 
 let peakSwing = 0, lastBrightness = null;
+let lastRodSample = null; // { len, span } from the best-tracked hand this calib frame
 let frameTimes = [], fpsValue = 0;           // render loop rate
 let trackFrameTimes = [], trackFpsValue = 0; // MediaPipe hand-detection rate
 let cameraReady = false;
@@ -460,6 +521,27 @@ el("glove-tolerance").addEventListener("input", e => {
 el("speedSlider").addEventListener("input", e => {
   settings.minSwing = +e.target.value;
   el("speedVal").textContent = e.target.value;
+});
+el("rod-tolerance").addEventListener("input", e => {
+  settings.rodTolerance = +e.target.value;
+  el("rod-tol-val").textContent = e.target.value;
+});
+el("foreshorten-sensitivity").addEventListener("input", e => {
+  settings.minForeshortenRate = +e.target.value;
+  el("foreshorten-val").textContent = e.target.value;
+});
+el("btnRodCapture").addEventListener("click", () => {
+  if (!lastRodSample) {
+    el("rodCalibStatus").textContent =
+      "No rod detected yet — hold it up in view of the camera and try again.";
+    el("rodCalibStatus").className = "hint warn";
+    return;
+  }
+  settings.rodRefLenPerSpan = lastRodSample.len / lastRodSample.span;
+  el("rodCalibStatus").textContent =
+    "Calibrated — reference ratio " + settings.rodRefLenPerSpan.toFixed(0) +
+    ". Foreshorten-based slashing is now active.";
+  el("rodCalibStatus").className = "hint";
 });
 el("offSlider").addEventListener("input", e => {
   settings.offsetMs = +e.target.value;
@@ -586,7 +668,10 @@ function popup(x, y, text, color) {
 
 // Split a block along the cut line and throw the two halves apart. This is
 // what makes a hit read as a *slice* rather than the block simply vanishing.
-function spawnSlice(x, y, size, color, vx, vy) {
+// Takes the saber itself (not just its velocity) so the slash streak can
+// trace the tip's actual recent path.
+function spawnSlice(x, y, size, color, saber) {
+  const vx = saber.vx, vy = saber.vy;
   const mag = Math.hypot(vx, vy) || 1;
   const ux = vx / mag, uy = vy / mag;        // cut direction
   const nx = -uy, ny = ux;                   // perpendicular: halves separate here
@@ -597,17 +682,27 @@ function spawnSlice(x, y, size, color, vx, vy) {
   // instead of always playing identically regardless of how it was hit.
   const power = Math.min(2.2, Math.max(0.7, mag / 900));
 
-  for (const s of [1, -1]) {
+  for (const side of [1, -1]) {
     shards.push({
       x, y, size,
-      vx: (nx * s * 4.6 + ux * 2.2) * power,
-      vy: (ny * s * 4.6 + uy * 2.2) * power + 0.6,
-      rot: ang, spin: s * 0.12 * power,
-      cut: ang, half: s,
+      vx: (nx * side * 4.6 + ux * 2.2) * power,
+      vy: (ny * side * 4.6 + uy * 2.2) * power + 0.6,
+      rot: ang, spin: side * 0.12 * power,
+      cut: ang, half: side,
       life: 26, max: 26, color,
     });
   }
-  slashes.push({ x, y, ux, uy, len: size * (2.0 + 0.5 * power), life: 9, max: 9, color });
+
+  // The streak traces the blade tip's actual recent path (its last few
+  // tracked samples, plus where it is right now) instead of a synthetic
+  // straight dash — an arcing swing draws an arcing streak, a straight
+  // swing draws a straight one, matching whatever the hand actually did.
+  const pts = saber.trail.map(p => ({ x: p.tx, y: p.ty }));
+  pts.push({ x: saber.tx, y: saber.ty });
+  slashes.push({
+    x, y, ux, uy, pts,
+    len: size * (2.0 + 0.5 * power), life: 9, max: 9, color,
+  });
 }
 
 /* ==========================================================================
@@ -967,7 +1062,11 @@ function drawSaber(s, color) {
 }
 
 function drawEffects() {
-  // Slash streak — a bright stroke along the line the saber travelled.
+  // Slash streak — a bright stroke tracing the blade tip's own recent path
+  // (see spawnSlice) rather than a synthetic straight dash, so an arcing
+  // swing actually reads as an arc and a straight swing as a straight line —
+  // whatever the hand really did. Falls back to a straight segment through
+  // the cut point if there weren't enough tracked samples to trace.
   for (let i = slashes.length - 1; i >= 0; i--) {
     const s = slashes[i];
     s.life--;
@@ -977,10 +1076,16 @@ function drawEffects() {
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 5 * a;
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.shadowBlur = 24; ctx.shadowColor = s.color;
     ctx.beginPath();
-    ctx.moveTo(s.x - s.ux * s.len / 2, s.y - s.uy * s.len / 2);
-    ctx.lineTo(s.x + s.ux * s.len / 2, s.y + s.uy * s.len / 2);
+    if (s.pts && s.pts.length >= 2) {
+      ctx.moveTo(s.pts[0].x, s.pts[0].y);
+      for (let p = 1; p < s.pts.length; p++) ctx.lineTo(s.pts[p].x, s.pts[p].y);
+    } else {
+      ctx.moveTo(s.x - s.ux * s.len / 2, s.y - s.uy * s.len / 2);
+      ctx.lineTo(s.x + s.ux * s.len / 2, s.y + s.uy * s.len / 2);
+    }
     ctx.stroke();
     ctx.restore();
     if (s.life <= 0) slashes.splice(i, 1);
@@ -1149,6 +1254,81 @@ function wristColorDistance(lm) {
   );
 }
 
+// Find the physical white rod near a tracked hand, instead of assuming its
+// angle from hand-skeleton geometry. Classical CV, not a trained model:
+// threshold a search box around the palm for bright/low-saturation pixels,
+// then take the principal axis of that pixel cloud (PCA on the 2D point set)
+// as the rod's long axis, and the extreme projections along it as the rod's
+// two ends. Cheap enough to run per hand-detection sample (not every render
+// frame) and holds up reasonably well against typical indoor lighting, same
+// caveat as the black-glove filter above — it is a threshold, not real
+// object recognition, and can be thrown off by bright walls or clothing.
+// That's what the CALIBRATE screen's rod-tolerance slider is for.
+function detectRod(cx, cy, expectedLen, tolerance) {
+  const half = Math.min(260, Math.max(90, expectedLen * 1.15));
+  const bx = Math.max(0, Math.round(cx - half));
+  const by = Math.max(0, Math.round(cy - half));
+  const bw = Math.min(W - bx, Math.round(half * 2));
+  const bh = Math.min(H - by, Math.round(half * 2));
+  if (bw < 10 || bh < 10) return null;
+
+  const data = rawCtx.getImageData(bx, by, bw, bh).data;
+
+  // A rod pixel is bright with low colour saturation (near-white/near-grey).
+  // Sampling every other row/col keeps this affordable at hand-sample rate
+  // without meaningfully hurting the PCA fit — a rod is a large blob, not a
+  // few isolated pixels.
+  let n = 0, sx = 0, sy = 0;
+  const xs = [], ys = [];
+  for (let y = 0; y < bh; y += 2) {
+    for (let x = 0; x < bw; x += 2) {
+      const idx = (y * bw + x) * 4;
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+      const maxc = Math.max(r, g, b), minc = Math.min(r, g, b);
+      const bright = (r + g + b) / 3;
+      if (bright > 255 - tolerance && (maxc - minc) < tolerance * 0.7) {
+        xs.push(x); ys.push(y);
+        sx += x; sy += y; n++;
+      }
+    }
+  }
+  if (n < 25) return null; // not enough rod-coloured pixels — treat as lost
+
+  const mx = sx / n, my = sy / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  sxx /= n; syy /= n; sxy /= n;
+
+  // Principal axis of the pixel cloud — the rod's long axis in screen space.
+  // This is what makes the rendered saber follow the rod's real angle: hold
+  // it upright and this comes out vertical, tilt it and this tilts with it.
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const ax = Math.cos(theta), ay = Math.sin(theta);
+
+  let minP = Infinity, maxP = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = (xs[i] - mx) * ax + (ys[i] - my) * ay;
+    if (p < minP) minP = p;
+    if (p > maxP) maxP = p;
+  }
+  const length = maxP - minP;
+  if (length < 20) return null; // too small/round to be the rod — a stray blob
+
+  const e0 = { x: bx + mx + ax * minP, y: by + my + ay * minP };
+  const e1 = { x: bx + mx + ax * maxP, y: by + my + ay * maxP };
+
+  // Whichever end sits nearer the tracked palm is the grip end.
+  const d0 = Math.hypot(e0.x - cx, e0.y - cy);
+  const d1 = Math.hypot(e1.x - cx, e1.y - cy);
+  const grip = d0 <= d1 ? e0 : e1;
+  const tip  = d0 <= d1 ? e1 : e0;
+
+  return { grip, tip, length };
+}
+
 function filterHands(list) {
   if (settings.filter === "off") return list.slice(0, 2);
 
@@ -1238,6 +1418,18 @@ function dist2(h, s) {
 }
 
 function update(s, h, now, dt) {
+  s.rodDetected = h.rodDetected;
+
+  // Apparent length relative to what a fully-extended (in-plane) rod should
+  // measure at this distance, per the CALIBRATE reference. 1 = full length
+  // visible; it falls toward 0 as the rod rotates out of the image plane —
+  // exactly what a real slash does when the wrist snaps it around. Stays
+  // pinned at 1 (i.e. disabled) until the player has actually calibrated.
+  const expectedLen = settings.rodRefLenPerSpan ? settings.rodRefLenPerSpan * h.span : null;
+  const newForeshorten = expectedLen
+    ? Math.max(0, Math.min(1.4, h.rodLen / expectedLen))
+    : 1;
+
   if (!s.active || now - s.seen > 180) {
     // Fresh acquisition: snap to the sample and start from rest, otherwise the
     // jump from the stale position registers as one enormous phantom swing.
@@ -1248,6 +1440,7 @@ function update(s, h, now, dt) {
     s.vx = s.vy = 0; s.speed = 0;
     s.trail.length = 0;
     s.dispReady = false;
+    s.foreshorten = newForeshorten; s.foreshortenRate = 0;
   } else if (Math.hypot(h.x - s.x, h.y - s.y) / dt > settings.maxHandSpeed) {
     // The hand appears to have teleported. Real arms do not move this fast, so
     // this is a tracking discontinuity: the detector swapped which hand is
@@ -1261,6 +1454,7 @@ function update(s, h, now, dt) {
     s.vx = s.vy = 0; s.speed = 0;
     s.trail.length = 0;
     s.dispReady = false;
+    s.foreshorten = newForeshorten; s.foreshortenRate = 0;
   } else {
     s.px = s.x; s.py = s.y;
     s.ptx = s.tx; s.pty = s.ty;
@@ -1268,11 +1462,11 @@ function update(s, h, now, dt) {
     const dx = h.x - s.px;
     const dy = h.y - s.py;
     const v = Math.hypot(dx, dy);
-    
+
     // Scale alpha dynamically
     // Snappy and natural tracking with baseline smoothing
     const alpha = Math.min(0.95, 0.4 + (v * 0.02));
-    
+
     s.x = (alpha * h.x) + ((1 - alpha) * s.px);
     s.y = (alpha * h.y) + ((1 - alpha) * s.py);
 
@@ -1291,6 +1485,15 @@ function update(s, h, now, dt) {
     s.vx += (inst.x - s.vx) * 0.55;
     s.vy += (inst.y - s.vy) * 0.55;
     s.speed = Math.hypot(s.vx, s.vy);
+
+    // Same idea as velocity, but for the rod's apparent length: how fast it
+    // is shrinking, smoothed the same way so one noisy detection frame can't
+    // fake a slash. A positive rate means the rod is foreshortening — the
+    // player just rotated it out of the image plane, which a translational
+    // swing alone would not do.
+    const rawForeshortenRate = (s.foreshorten - newForeshorten) / gap;
+    s.foreshortenRate += (rawForeshortenRate - s.foreshortenRate) * 0.55;
+    s.foreshorten = newForeshorten;
   }
 
   s.span += (h.span - s.span) * 0.25;   // smoothed; drives the depth cue
@@ -1369,12 +1572,15 @@ function checkHits(key) {
     if (saberDist(s, pos.x, pos.y) > HIT_RADIUS) continue;
 
     // A block only cuts on an actual swing through it — resting the rod on
-    // top of it, or drifting past slowly, is not a slash. Without this, every
-    // hit felt the same regardless of how you played: touch equals cut, so
-    // there was nothing to actually swing for. settings.minSwing is the same
-    // value tuned on the CALIBRATE screen (SWING SENSITIVITY), which
-    // previously had nothing reading it.
-    if (s.speed < settings.minSwing) continue;
+    // top of it, or drifting past slowly, is not a slash. Two independent
+    // signals count as a swing, either is enough: the rod translating fast
+    // (hand speed, the original check), or the rod's tracked length
+    // shrinking fast (a rotational flick that foreshortens it, once
+    // calibrated — see detectRod/update). A real slash usually trips both;
+    // this just means neither one alone has to carry it.
+    const swung = s.speed >= settings.minSwing ||
+                  s.foreshortenRate >= settings.minForeshortenRate;
+    if (!swung) continue;
 
     // Left saber owns the red lanes, right saber the cyan ones. Cutting a
     // block with the wrong saber is a real mistake, not a non-event: it now
@@ -1424,7 +1630,7 @@ function checkHits(key) {
     // shower of sparks as a full swing.
     const power = Math.min(2.2, Math.max(0.7, s.speed / 900));
     burst(pos.x, pos.y, color, Math.round((perfect ? 30 : 20) * power));
-    spawnSlice(pos.x, pos.y, NOTE_SIZE * pos.scale, color, s.vx, s.vy);
+    spawnSlice(pos.x, pos.y, NOTE_SIZE * pos.scale, color, s);
     popup(pos.x, pos.y - 40, perfect ? "PERFECT " + mult + "x" : "+" + (100 * mult), color);
     active.splice(i, 1);
     updateHUD();
@@ -1468,20 +1674,38 @@ function onResults(res) {
       }
       px /= 5; py /= 5;
 
-      // Rod points along the rigid wrist-to-middle-knuckle axis. Length
-      // tracks apparent hand size so it looks right at any distance.
+      // Fallback rod axis: the rigid wrist-to-middle-knuckle direction,
+      // length tracking apparent hand size. Used whenever detectRod can't
+      // find the actual rod this sample (occlusion, bad lighting, rod out
+      // of the search box) — grip stays put, only the blade direction and
+      // length fall back to this estimate.
       const wx = (1 - lm[0].x) * W, wy = lm[0].y * H;
       const kx = (1 - lm[9].x) * W, ky = lm[9].y * H;
       let dx = kx - wx, dy = ky - wy;
       const mag = Math.hypot(dx, dy) || 1;
       dx /= mag; dy /= mag;
       const span = handSpan(lm);
-      const rodLen = Math.max(70, Math.min(190, span * H * 1.5));
+      const fallbackLen = Math.max(70, Math.min(190, span * H * 1.5));
+
+      // Try to find the actual physical rod near this hand. On success its
+      // real detected angle and length drive the saber — hold it upright,
+      // the saber is upright; tilt it, the saber tilts.
+      const rod = detectRod(px, py, fallbackLen, settings.rodTolerance);
+      let tx, ty, rodLen, rodDetected;
+      if (rod) {
+        tx = rod.tip.x; ty = rod.tip.y;
+        rodLen = rod.length;
+        rodDetected = true;
+      } else {
+        tx = px + dx * fallbackLen; ty = py + dy * fallbackLen;
+        rodLen = fallbackLen;
+        rodDetected = false;
+      }
 
       list.push({
-        lm, span,
-        x: px, y: py,                            // contact point
-        tx: px + dx * rodLen, ty: py + dy * rodLen, // rod tip
+        lm, span, rodLen, rodDetected,
+        x: px, y: py,   // contact point (grip) — always the tracked palm centre
+        tx, ty,         // rod tip — detected when possible, else the fallback
       });
     }
   }
@@ -1497,6 +1721,14 @@ function onResults(res) {
     el("calibRead").textContent = lastBrightness === null
       ? "—" : lastBrightness.toFixed(0);
     el("speedRead").textContent = peakSwing.toFixed(0);
+
+    // Report the better-tracked hand's live rod reading so CAPTURE UPRIGHT
+    // REFERENCE has something honest to grab, and so the player can see
+    // detection actually working before relying on it.
+    const best = kept.filter(h => h.rodDetected).sort((a, b) => b.span - a.span)[0];
+    lastRodSample = best ? { len: best.rodLen, span: best.span } : null;
+    el("rodLenRead").textContent = best ? best.rodLen.toFixed(0) : "—";
+    el("rodRatioRead").textContent = best ? (best.rodLen / best.span).toFixed(0) : "—";
   }
 }
 
@@ -1640,6 +1872,8 @@ window.__debug = {
   setNow: ms => { nowOverride = ms; },
   releaseTime: () => { timeOverride = null; nowOverride = null; },
   noteXYScale,
+  detectRod, // exposed for on-site tuning and testing without a live rod
+  rawCtx,    // the buffer detectRod reads from
   // fromTime drops everything before that point, so a section can be replayed
   // without the earlier blocks spawning and instantly counting as misses.
   startRun(fromTime) {
